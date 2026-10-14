@@ -1,6 +1,6 @@
 """
-AIKidVerse1 Story Planner v3.1
-Free, template-driven Telugu Shorts script planner.
+AIKidVerse1 Story Planner v3.2
+Free, template-driven Telugu Shorts planner with stronger quality gates.
 
 Inputs:
   SUPABASE_URL
@@ -59,10 +59,10 @@ STORY_FORMATS = {
         ],
         "setting": "One bright, tidy family living room. Keep the same furniture, lighting, clothing, and character designs throughout.",
         "scenes": [
-            ("Hook", "Close-up: Chinnu hides a small squeaky toy behind their back. Chinnu accidentally squeezes it; it gives a tiny squeak. Amma notices.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu freezes, hides the same squeaky toy behind their back, and tries to look innocent."),
-            ("Setup", "Medium two-shot: Chinnu points toward the kitchen to distract Amma while keeping the toy hidden.", "అమ్మా, వంటగదిలో ఏదో శబ్దం వచ్చింది!", "Amma turns toward the kitchen. Chinnu relaxes, but accidentally squeezes the toy again."),
-            ("Escalation", "Amma turns back toward Chinnu as the hidden toy squeaks loudly. Keep the toy hidden until the reaction.", "వంటగదిలో కాదు… శబ్దం నీ వెనకాల నుంచే వస్తోంది!", "Amma points gently at Chinnu's back. Chinnu looks down at the toy, caught red-handed."),
-            ("Payoff", "Chinnu slowly brings the squeaky toy out and it squeaks one final time. Amma tries to stay serious but laughs.", "అమ్మా… ఈ బొమ్మే నా రహస్యాన్ని చెప్పేసింది!", "Chinnu hugs the toy sheepishly; Amma smiles and taps Chinnu's nose. End on their shared laugh."),
+            ("Hook", "Close-up: Chinnu hides a small squeaky toy behind their back. It squeaks once by accident. Amma hears it and looks at Chinnu.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu freezes, hides the same squeaky toy, and tries to look innocent."),
+            ("Setup", "Medium two-shot: Chinnu keeps the squeaky toy behind their back and points toward the kitchen to distract Amma.", "అమ్మా, వంటగదిలో ఏదో పడినట్టుంది!", "Amma glances toward the kitchen. Chinnu relaxes, but the hidden toy squeaks again."),
+            ("Escalation", "Amma turns back as the hidden toy squeaks a third time. Keep the toy hidden until Amma identifies the sound.", "వంటగదిలో ఏమీ పడలేదు… శబ్దం నీ వెనకాల నుంచే వస్తోంది!", "Amma gently points toward Chinnu's back. Chinnu looks down, realizing the toy has given away the secret."),
+            ("Payoff", "Chinnu slowly reveals the same squeaky toy. It squeaks one final time; Amma tries to look serious but starts laughing.", "అమ్మా… ఈ బొమ్మే నా రహస్యాన్ని చెప్పేసింది!", "Chinnu hugs the toy sheepishly. Amma laughs with Chinnu; end on their shared reaction."),
         ],
     },
     "School Comedy": {
@@ -504,8 +504,10 @@ def make_script(format_name):
     }
 
 
-def validate_script(script):
+def validate_script(script, format_name=None):
+    """Validate structure and selected authored continuity rules; not a grammar/humor judge."""
     errors = []
+    warnings = []
     scenes = script.get("scenes", [])
 
     if script.get("target_duration_seconds") != TARGET_DURATION:
@@ -547,6 +549,10 @@ def validate_script(script):
             errors.append(f"Scene {i}: Telugu dialogue is missing or too short to carry a story beat.")
         if not re.search(r"[\u0C00-\u0C7F]", dialogue):
             errors.append(f"Scene {i}: dialogue must contain Telugu script.")
+        if dialogue and dialogue[-1] not in "!?…।.":
+            warnings.append(f"Scene {i}: dialogue may need punctuation for natural voice delivery.")
+        if len(dialogue.split()) > max(4, duration * 2):
+            errors.append(f"Scene {i}: dialogue is too long for the scene; shorten it for clear spoken delivery.")
         if i > len(expected_beats) or scene.get("scene_name") != expected_beats[i - 1]:
             errors.append(f"Scene {i}: story beat order must be Hook, Setup, Escalation, Payoff.")
 
@@ -569,7 +575,29 @@ def validate_script(script):
     if len(char_names) != len(set(char_names)):
         errors.append("Character bible contains duplicate names.")
 
-    return {"valid": len(errors) == 0, "errors": errors, "total_duration_seconds": total}
+    # Format-specific continuity gates for the squeaky-toy story. This catches
+    # regressions where the setup prop disappears before the payoff.
+    if format_name == "Telugu Baby and Family Comedy" and len(scenes) == 4:
+        scene_texts = [clean_text(" ".join([
+            scene.get("visual_direction", ""),
+            scene.get("character_action_and_expression", ""),
+            scene.get("dialogue_telugu", ""),
+        ])).lower() for scene in scenes]
+        prop_terms = ("toy", "squeak")
+        for i, text in enumerate(scene_texts, start=1):
+            if not any(term in text for term in prop_terms):
+                errors.append(f"Scene {i}: the squeaky-toy story prop must remain visible or causally relevant in every scene.")
+        if "kitchen" not in scene_texts[1] or "వంటగదిలో ఏమీ" not in scene_texts[2]:
+            errors.append("Family comedy: the kitchen distraction must be established in Setup and explicitly rejected in Escalation.")
+        if not any(term in scene_texts[3] for term in ("reveals", "brings", "out")):
+            errors.append("Family comedy: the payoff must visibly reveal the hidden toy.")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "total_duration_seconds": total,
+    }
 
 
 def build_candidates(own_videos, external_scores, history):
@@ -603,7 +631,7 @@ def build_candidates(own_videos, external_scores, history):
         )
 
         script = make_script(format_name)
-        validation = validate_script(script)
+        validation = validate_script(script, format_name)
         if not validation["valid"]:
             log.warning("Rejecting %s: %s", format_name, validation["errors"])
             continue
@@ -700,7 +728,7 @@ def main():
 
     selected = candidates[0]
     selected["selection"] = {
-        "planner_version": "3.1-quality-gate",
+        "planner_version": "3.2-continuity-quality-gate",
         "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
@@ -728,12 +756,12 @@ def main():
             "Trend results are public YouTube search samples, not an official trending ranking.",
             "Public views per day are only a rough trend signal.",
             "Scripts are generated from authored templates, not a generative AI model.",
-            "Quality checks validate structure and Telugu-script presence, not perfect grammar.",
+            "Quality checks validate structure, dialogue density, and selected authored continuity rules; they cannot guarantee perfect Telugu grammar or humor.",
             "Video generation, voice synthesis, editing, and publishing are separate workflow stages.",
         ],
     }
 
-    validation = validate_script(selected["script"])
+    validation = validate_script(selected["script"], selected["format"])
     selected["validation"] = validation
     if not validation["valid"]:
         raise RuntimeError("Final script validation failed: " + "; ".join(validation["errors"]))
