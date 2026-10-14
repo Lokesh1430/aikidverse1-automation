@@ -1,0 +1,39 @@
+
+name: AIKidVerse1 Daily Automation
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every day at 18:00 India time (12:30 UTC)
+    - cron: "30 12 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aikidverse1-daily
+  cancel-in-progress: false
+
+jobs:
+  cloud-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run AIKidVerse1 automation
+        run: python automation.py
+
+      - name: Save run report
+        uses: actions/upload-artifact@v4
+        with:
+          name: aikidverse1-run-report
+          path: run_report.json
+          retention-days: 7
