@@ -1,5 +1,5 @@
 """
-AIKidVerse1 Story Planner v3
+AIKidVerse1 Story Planner v3.1
 Free, template-driven Telugu Shorts script planner.
 
 Inputs:
@@ -59,10 +59,10 @@ STORY_FORMATS = {
         ],
         "setting": "One bright, tidy family living room. Keep the same furniture, lighting, clothing, and character designs throughout.",
         "scenes": [
-            ("Hook", "Close-up on Chinnu hiding a small toy behind their back. Amma notices the suspicious smile.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu looks innocent, then glances at the hidden toy."),
-            ("Setup", "Medium two-shot. Chinnu tries to distract Amma by pointing toward the kitchen.", "అమ్మా, అక్కడ ఏదో శబ్దం వస్తోంది!", "Amma looks toward the kitchen; Chinnu slowly moves the toy."),
-            ("Escalation", "Over-the-shoulder shot. Amma turns back just as the toy makes a loud squeak.", "అయితే ఈ శబ్దం ఎవరు చేస్తున్నారు?", "Chinnu freezes. The toy squeaks again at the worst possible moment."),
-            ("Payoff", "Close-up on Amma smiling knowingly, then Chinnu gives an exaggerated sheepish grin.", "బొమ్మే నిజం చెప్పేసింది కదా!", "Chinnu hugs the toy; Amma laughs and gently taps Chinnu's nose."),
+            ("Hook", "Close-up: Chinnu hides a small squeaky toy behind their back. Chinnu accidentally squeezes it; it gives a tiny squeak. Amma notices.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu freezes, hides the same squeaky toy behind their back, and tries to look innocent."),
+            ("Setup", "Medium two-shot: Chinnu points toward the kitchen to distract Amma while keeping the toy hidden.", "అమ్మా, వంటగదిలో ఏదో శబ్దం వచ్చింది!", "Amma turns toward the kitchen. Chinnu relaxes, but accidentally squeezes the toy again."),
+            ("Escalation", "Amma turns back toward Chinnu as the hidden toy squeaks loudly. Keep the toy hidden until the reaction.", "వంటగదిలో కాదు… శబ్దం నీ వెనకాల నుంచే వస్తోంది!", "Amma points gently at Chinnu's back. Chinnu looks down at the toy, caught red-handed."),
+            ("Payoff", "Chinnu slowly brings the squeaky toy out and it squeaks one final time. Amma tries to stay serious but laughs.", "అమ్మా… ఈ బొమ్మే నా రహస్యాన్ని చెప్పేసింది!", "Chinnu hugs the toy sheepishly; Amma smiles and taps Chinnu's nose. End on their shared laugh."),
         ],
     },
     "School Comedy": {
@@ -463,7 +463,7 @@ def make_script(format_name):
 
     # Set speaker labels for every format, using character names in the authored line.
     dialogue_speakers = {
-        "Telugu Baby and Family Comedy": ["Amma", "Chinnu", "Amma", "Amma"],
+        "Telugu Baby and Family Comedy": ["Amma", "Chinnu", "Amma", "Chinnu"],
         "School Comedy": ["Balu", "Teacher", "Balu", "Teacher"],
         "Animal Adventure": ["Mintu", "Mintu", "Mintu", "Mintu"],
         "Visual Slapstick": ["Raju", "Raju", "Raju", "Raju"],
@@ -494,6 +494,11 @@ def make_script(format_name):
             "Do not add on-screen text, captions, logos, or watermarks unless explicitly requested.",
             "Generate original visuals and dialogue; do not reproduce source videos.",
         ],
+        "story_arc": {
+            "setup": "Introduce one clear problem, secret, or goal in the hook/setup scenes.",
+            "escalation": "Make the same problem harder or more obvious; do not introduce an unrelated problem.",
+            "payoff": "Resolve the original setup with a clear visual or verbal punchline.",
+        },
         "scenes": scenes,
         "ending_instruction": "The final scene must resolve the setup and end with a clear visual or verbal punchline.",
     }
@@ -510,8 +515,16 @@ def validate_script(script):
     if not script.get("character_bible"):
         errors.append("Character bible is missing.")
 
+    char_names = [
+        clean_text(c.get("name"))
+        for c in script.get("character_bible", [])
+        if clean_text(c.get("name"))
+    ]
     total = 0
     previous_end = 0
+    expected_beats = ["Hook", "Setup", "Escalation", "Payoff"]
+    if len(scenes) != 4:
+        errors.append("Exactly four story beats are required: Hook, Setup, Escalation, Payoff.")
     for i, scene in enumerate(scenes, start=1):
         required = [
             "scene_number", "scene_name", "duration_seconds", "visual_direction",
@@ -530,24 +543,29 @@ def validate_script(script):
         previous_end += duration
 
         dialogue = clean_text(scene.get("dialogue_telugu"))
-        if len(dialogue) < 4:
-            errors.append(f"Scene {i}: Telugu dialogue is missing or too short.")
+        if len(dialogue) < 8:
+            errors.append(f"Scene {i}: Telugu dialogue is missing or too short to carry a story beat.")
         if not re.search(r"[\u0C00-\u0C7F]", dialogue):
             errors.append(f"Scene {i}: dialogue must contain Telugu script.")
+        if i > len(expected_beats) or scene.get("scene_name") != expected_beats[i - 1]:
+            errors.append(f"Scene {i}: story beat order must be Hook, Setup, Escalation, Payoff.")
 
-        if not scene.get("dialogue_speaker"):
+        speaker = clean_text(scene.get("dialogue_speaker"))
+        if not speaker:
             errors.append(f"Scene {i}: dialogue speaker is missing.")
+        elif speaker not in char_names:
+            errors.append(f"Scene {i}: speaker '{speaker}' is not listed in the character bible.")
+
+        # A 45-second Short needs concise lines. This is a warning threshold, not a grammar check.
+        word_count = len(dialogue.split())
+        if duration > 0 and word_count / duration > 3.5:
+            errors.append(f"Scene {i}: dialogue is too dense for its {duration}-second scene.")
 
     if total != TARGET_DURATION:
         errors.append(
             f"Scene durations total {total} seconds, expected {TARGET_DURATION}."
         )
 
-    char_names = [
-        clean_text(c.get("name"))
-        for c in script.get("character_bible", [])
-        if clean_text(c.get("name"))
-    ]
     if len(char_names) != len(set(char_names)):
         errors.append("Character bible contains duplicate names.")
 
@@ -682,7 +700,7 @@ def main():
 
     selected = candidates[0]
     selected["selection"] = {
-        "planner_version": "3.0",
+        "planner_version": "3.1-quality-gate",
         "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
