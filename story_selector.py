@@ -1,19 +1,20 @@
-
 """
-AIKidVerse1 — Trend-Based Story Selector
------------------------------------------
-Uses:
-- YouTube Data API: recent public video trend signals
-- YouTube Data API: recent uploads from your own channel
-- Supabase: story history and duplicate avoidance
-- Local JSON: daily_story.json
+AIKidVerse1 Story Planner v3
+Free, template-driven Telugu Shorts script planner.
 
-Required environment variables:
+Inputs:
   SUPABASE_URL
   SUPABASE_SECRET_KEY
   YOUTUBE_TOKEN_JSON
 
-This script selects a story brief. It does NOT generate the final video.
+Outputs:
+  daily_story.json
+
+Important:
+- Uses YouTube Data API public video statistics as trend/performance signals.
+- Does not claim public search results are official YouTube trending rankings.
+- Generates validated 45-second scripts from original structured templates.
+- No paid LLM/API is used.
 """
 
 import os
@@ -21,30 +22,24 @@ import re
 import json
 import hashlib
 import logging
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections import Counter
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from supabase import create_client
 
-
-# ---------------------------------------------------------
-# CONFIGURATION
-# ---------------------------------------------------------
-
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = BASE_DIR / "daily_story.json"
 
-CHANNEL_ID = "UCKZMPIaZW942vD9NO4uBLTQ"
 REGION_CODE = "IN"
-
-MAX_HISTORY_ROWS = 100
 MAX_OWN_VIDEOS = 40
-MAX_EXTERNAL_RESULTS = 8
-TREND_SEARCHES_PER_RUN = 4
+MAX_HISTORY_ROWS = 100
+SEARCH_QUERIES_PER_RUN = 4
+SEARCH_RESULTS_PER_QUERY = 5
+TARGET_DURATION = 45
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,853 +48,607 @@ logging.basicConfig(
 log = logging.getLogger("aikidverse1")
 
 
-# ---------------------------------------------------------
-# STORY FORMATS
-# ---------------------------------------------------------
+# The dialogue and story beats are authored templates, not copied from
+# external videos. The trend topic affects category selection only.
+STORY_FORMATS = {
+    "Telugu Baby and Family Comedy": {
+        "keywords": ["baby", "amma", "nanna", "family", "mother", "father", "sleep", "homework", "chocolate", "బాబు", "అమ్మ"],
+        "characters": [
+            {"name": "Chinnu", "description": "A mischievous 4-year-old Telugu child, round expressive face, yellow T-shirt, blue shorts, consistent appearance in every scene."},
+            {"name": "Amma", "description": "A warm Telugu mother in a simple green cotton saree, expressive eyes, patient but playfully strict."},
+        ],
+        "setting": "One bright, tidy family living room. Keep the same furniture, lighting, clothing, and character designs throughout.",
+        "scenes": [
+            ("Hook", "Close-up on Chinnu hiding a small toy behind their back. Amma notices the suspicious smile.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu looks innocent, then glances at the hidden toy."),
+            ("Setup", "Medium two-shot. Chinnu tries to distract Amma by pointing toward the kitchen.", "అమ్మా, అక్కడ ఏదో శబ్దం వస్తోంది!", "Amma looks toward the kitchen; Chinnu slowly moves the toy."),
+            ("Escalation", "Over-the-shoulder shot. Amma turns back just as the toy makes a loud squeak.", "అయితే ఈ శబ్దం ఎవరు చేస్తున్నారు?", "Chinnu freezes. The toy squeaks again at the worst possible moment."),
+            ("Payoff", "Close-up on Amma smiling knowingly, then Chinnu gives an exaggerated sheepish grin.", "బొమ్మే నిజం చెప్పేసింది కదా!", "Chinnu hugs the toy; Amma laughs and gently taps Chinnu's nose."),
+        ],
+    },
+    "School Comedy": {
+        "keywords": ["school", "teacher", "student", "class", "homework", "exam", "పాఠశాల", "టీచర్"],
+        "characters": [
+            {"name": "Balu", "description": "A playful Telugu schoolboy wearing a neat blue school uniform and backpack."},
+            {"name": "Teacher", "description": "A friendly teacher in a simple formal outfit, expressive but kind."},
+        ],
+        "setting": "One sunny classroom with desks, a blackboard, and school bags. Keep classroom layout and costumes consistent.",
+        "scenes": [
+            ("Hook", "Wide classroom shot. Balu proudly raises his hand before the teacher finishes the question.", "సార్, నాకు సమాధానం తెలుసు!", "Balu sits extra straight, looking overconfident."),
+            ("Setup", "Medium shot. The teacher asks a simple question and gestures toward the blackboard.", "సరే బాలు, నిన్న ఇచ్చిన హోంవర్క్ ఎక్కడ?", "Balu's smile slowly disappears."),
+            ("Escalation", "Close-up. Balu searches every pocket and opens his backpack upside down; only a lunch box falls out.", "సార్… హోంవర్క్ చదువుకోవడానికి ఇంట్లోనే ఉండిపోయింది!", "Nearby students try not to laugh."),
+            ("Payoff", "The teacher points at the lunch box while Balu offers it like a peace treaty.", "అయితే రేపు హోంవర్క్‌తో పాటు నీ సమాధానం కూడా తీసుకురా!", "Balu nods seriously, then checks whether the lunch box is still safe."),
+        ],
+    },
+    "Animal Adventure": {
+        "keywords": ["animal", "bear", "cat", "dog", "squirrel", "rabbit", "monkey", "bird", "puppy", "kitten", "కోతి", "కుక్క"],
+        "characters": [
+            {"name": "Mintu", "description": "A small orange squirrel with a cream belly, huge brown eyes, and a tiny blue scarf."},
+            {"name": "Crow", "description": "A friendly black crow with glossy feathers and a curious head tilt."},
+        ],
+        "setting": "One colorful garden with a large tree, a low wooden bench, and scattered leaves. Preserve character colors and prop positions.",
+        "scenes": [
+            ("Hook", "Low-angle close-up. Mintu proudly holds an oversized nut almost as big as its head.", "ఇది నా జీవితంలోనే పెద్ద గింజ!", "Mintu struggles to balance the nut."),
+            ("Setup", "Tracking shot as Mintu rolls the nut toward a tree hollow.", "దీన్ని నా రహస్య చోట దాచేస్తా!", "The nut rolls a little faster than Mintu expects."),
+            ("Escalation", "The nut bumps the bench and rolls in a circle. The crow hops aside just in time.", "అయ్యో! ఆగు… ఆగు!", "Mintu runs after it, paws moving comically fast."),
+            ("Payoff", "The nut stops right beside the tree hollow; the crow gently points to it with one wing.", "నేను పట్టుకున్నానా… లేక అదృష్టం పట్టుకుందా?", "Mintu laughs, shares a tiny piece with the crow, and they celebrate."),
+        ],
+    },
+    "Visual Slapstick": {
+        "keywords": ["funny", "prank", "balloon", "kite", "crazy", "slapstick", "comedy", "కామెడీ", "నవ్వు"],
+        "characters": [
+            {"name": "Raju", "description": "A cheerful young Telugu man wearing a bright orange shirt, dark trousers, and simple sandals."},
+            {"name": "Balloon", "description": "One oversized purple balloon tied to a short string; maintain its color, size, and string in every shot."},
+        ],
+        "setting": "One open village courtyard in daylight with a low wall and a single wooden stool.",
+        "scenes": [
+            ("Hook", "Raju poses proudly with the balloon as if it is a trophy.", "ఈ బెలూన్‌తో నా స్టైల్ చూడండి!", "A gentle breeze pulls the balloon upward."),
+            ("Setup", "Raju grabs the string with both hands and leans backward dramatically.", "నిన్ను అంత ఈజీగా వదలను!", "The stool slides slightly as Raju braces himself."),
+            ("Escalation", "The balloon drifts around the stool; Raju spins once and ends up facing the wrong direction.", "అయ్యో, బెలూన్ నా చుట్టూ తిరుగుతోందా… నేనా?", "He stops dizzy but remains safely on his feet."),
+            ("Payoff", "The balloon gently settles on Raju's head like a silly hat.", "చూశారా? చివరికి నా తలపైనే పార్క్ అయింది!", "Raju poses again, now pretending this was his plan all along."),
+        ],
+    },
+    "Fantasy Comedy": {
+        "keywords": ["magic", "magical", "wizard", "fantasy", "dragon", "time", "mystery", "మాయ", "మంత్రం"],
+        "characters": [
+            {"name": "Tara", "description": "A curious Telugu girl with two braids, a purple dress, and a small glowing toy wand."},
+            {"name": "Tiny Robot", "description": "A knee-high silver toy robot with blue lights and a friendly face."},
+        ],
+        "setting": "One cozy playroom with a toy shelf, a rug, and a window. Magical effects are soft, colorful, and family-friendly.",
+        "scenes": [
+            ("Hook", "Tara points her toy wand at a teddy bear; a tiny sparkle pops.", "అబ్బా! నా మంత్రం పని చేసింది!", "The robot watches with wide glowing eyes."),
+            ("Setup", "Tara points at a toy block and whispers a spell.", "ఇప్పుడు ఈ బ్లాక్ ఎగరాలి!", "The block stays still; the robot tilts its head."),
+            ("Escalation", "The wand accidentally activates the robot's tiny fan; paper stars swirl around the room.", "అయ్యో, బ్లాక్ కాదు… గది మొత్తం ఎగురుతోంది!", "Tara and the robot duck playfully as paper stars float."),
+            ("Payoff", "The fan stops and one paper star lands perfectly on Tara's head.", "మంత్రం సక్సెస్… అలంకరణ ఫ్రీ!", "Tara bows; the robot gives a happy beep."),
+        ],
+    },
+    "Village Comedy": {
+        "keywords": ["village", "farmer", "market", "village comedy", "పల్లె", "రైతు", "గ్రామం"],
+        "characters": [
+            {"name": "Ramu", "description": "A cheerful Telugu village youth wearing a cream shirt, checked lungi, and sandals."},
+            {"name": "Vendor", "description": "A friendly local fruit vendor in a simple shirt, standing behind a wooden cart."},
+        ],
+        "setting": "One colorful village market lane with a fruit cart and a few baskets. Keep the cart and fruit positions consistent.",
+        "scenes": [
+            ("Hook", "Ramu examines one huge watermelon with exaggerated seriousness.", "అన్నా, ఈ పుచ్చకాయ ఎంత బరువుంది?", "The vendor proudly pats the watermelon."),
+            ("Setup", "The vendor points to a weighing scale. Ramu tries lifting the watermelon with one hand.", "బరువు కాదు బాబూ, ఇది స్పెషల్ పుచ్చకాయ!", "Ramu pretends it is light, but his knees bend."),
+            ("Escalation", "Ramu rolls it carefully onto the cart; the cart creaks and moves a few inches.", "అన్నా, పుచ్చకాయ కొనాలా… బండిని కొనాలా?", "The vendor grabs the cart handle to stop it."),
+            ("Payoff", "The watermelon settles safely into a basket; Ramu proudly pays with a tiny coin.", "ఇంత పెద్దదానికి ఇంత చిన్న బిల్లు!", "The vendor reveals the coin is only an advance; both laugh."),
+        ],
+    },
+    "Human and Animal Friendship": {
+        "keywords": ["friend", "rescue", "boy", "girl", "dog", "cat", "puppy", "kitten", "friendship", "స్నేహం"],
+        "characters": [
+            {"name": "Anu", "description": "A kind Telugu child in a yellow dress with a small red backpack."},
+            {"name": "Puppy", "description": "A tiny cream-colored puppy with floppy ears and a red collar."},
+        ],
+        "setting": "One quiet park path beside a bench and a small flower bed. Keep the weather and character appearance consistent.",
+        "scenes": [
+            ("Hook", "Anu hears a tiny whimper and kneels beside the bench.", "ఎవరది? చిన్నగా ఏడుపు వినిపిస్తోంది!", "The puppy peeks out from behind the bench."),
+            ("Setup", "Anu places a little bowl of water on the ground and waits patiently.", "భయపడకు బుజ్జీ, నేను నీకు సహాయం చేస్తాను.", "The puppy sniffs the bowl and slowly approaches."),
+            ("Escalation", "The puppy's loose leash catches gently on a low branch; Anu carefully frees it.", "అయ్యో, నీ పట్టీ ఇక్కడ చిక్కుకుంది!", "Anu unhooks the leash without pulling the puppy."),
+            ("Payoff", "The puppy wags its tail and places one paw in Anu's hand.", "ఇప్పటి నుంచి మనం మంచి ఫ్రెండ్స్!", "They walk together toward a nearby adult for safe help."),
+        ],
+    },
+    "Festival Story": {
+        "keywords": ["festival", "diwali", "bonalu", "ganesha", "holi", "sankranti", "dasara", "పండుగ", "బోనాలు"],
+        "characters": [
+            {"name": "Chinni", "description": "A cheerful Telugu child wearing a festive traditional outfit in pink and gold."},
+            {"name": "Grandmother", "description": "A smiling Telugu grandmother in a traditional saree, with gentle expressions."},
+        ],
+        "setting": "One decorated home entrance with flowers, rangoli, and warm festive lights. Keep decorations stable across scenes.",
+        "scenes": [
+            ("Hook", "Chinni stands proudly beside a colorful rangoli and holds a flower basket.", "నానమ్మా, నా అలంకరణ ఎలా ఉంది?", "Grandmother admires the design."),
+            ("Setup", "Chinni carefully places one final flower, then steps back to admire the rangoli.", "ఇప్పుడు ఇది పర్ఫెక్ట్!", "A tiny breeze moves a loose flower."),
+            ("Escalation", "The flower lands on Chinni's head like a crown.", "అయ్యో! పువ్వు నా తల మీదకు వచ్చేసింది!", "Grandmother laughs softly while Chinni looks surprised."),
+            ("Payoff", "Grandmother adjusts the flower into a neat little hair decoration.", "ఇప్పుడు నువ్వే పండుగ రాణివి!", "Chinni poses proudly; both smile toward the decorated doorway."),
+        ],
+    },
+    "Mini Moral Story": {
+        "keywords": ["moral", "lesson", "kindness", "honesty", "help", "truth", "నిజం", "మంచి పాఠం"],
+        "characters": [
+            {"name": "Kiran", "description": "A thoughtful Telugu child in a green T-shirt and shorts, with clear expressive eyes."},
+            {"name": "Friend", "description": "Kiran's friend in a blue outfit, friendly and patient."},
+        ],
+        "setting": "One sunny neighborhood walkway with a small flower pot near a gate.",
+        "scenes": [
+            ("Hook", "Kiran accidentally bumps a small empty flower pot; it tips over harmlessly.", "అయ్యో! ఇది నా వల్లే పడిపోయింది.", "Kiran looks around and hesitates."),
+            ("Setup", "Kiran notices the friend approaching and considers walking away.", "ఎవరూ చూడలేదు కదా…?", "Kiran pauses and looks back at the pot."),
+            ("Escalation", "Kiran returns, sets the pot upright, and checks that it is not broken.", "తప్పు జరిగితే దాన్ని సరిచేయాలి.", "The friend arrives and helps move the pot to a safe spot."),
+            ("Payoff", "The friend gives Kiran a grateful smile.", "నిజం చెప్పడం, సహాయం చేయడం రెండూ మంచివే!", "They water the plant together and walk away happily."),
+        ],
+    },
+    "Human vs Technology": {
+        "keywords": ["robot", "AI", "technology", "gadget", "smart", "phone", "టెక్నాలజీ", "రోబో"],
+        "characters": [
+            {"name": "Lok", "description": "A curious young Telugu creator wearing a teal hoodie and dark jeans."},
+            {"name": "Mini Robot", "description": "A small white home robot with a blue digital face and rounded arms."},
+        ],
+        "setting": "One tidy modern living room with a small side table and a charging dock.",
+        "scenes": [
+            ("Hook", "Lok stands beside the robot and folds his arms confidently.", "ఈ రోజు ఈ రోబోని నేను గెలుస్తా!", "The robot's blue face displays a playful smile."),
+            ("Setup", "Lok asks the robot to bring a book from the side table.", "రోబో, నాకు పుస్తకం తీసుకురా.", "The robot turns carefully toward the table."),
+            ("Escalation", "The robot brings the book perfectly, then gently offers Lok a bookmark too.", "అయ్యో, నేను చెప్పింది ఒక్కటే కదా!", "Lok looks at the extra bookmark in surprise."),
+            ("Payoff", "The robot points at the messy table; Lok notices his own unfinished chores.", "సరే బాస్, ముందు గది సర్దేస్తా!", "Lok starts tidying while the robot gives a cheerful beep."),
+        ],
+    },
+}
 
-# These are creative format templates, not fixed story ideas.
-# Trend titles are used only as topic signals, never copied
-# as the story title or script.
 
-FORMATS = [
-    {
-        "name": "Telugu Family Comedy",
-        "weight": 1.0,
-        "description": "A funny family misunderstanding with a surprising ending.",
-        "audience": "Telugu-speaking families and young viewers",
-    },
-    {
-        "name": "School Comedy",
-        "weight": 1.0,
-        "description": "A classroom challenge becomes unexpectedly hilarious.",
-        "audience": "Children, students and family audiences",
-    },
-    {
-        "name": "Animal Adventure",
-        "weight": 1.0,
-        "description": "A clever animal faces a funny problem and finds an unexpected solution.",
-        "audience": "Kids and animation fans",
-    },
-    {
-        "name": "Visual Slapstick",
-        "weight": 1.0,
-        "description": "A simple visual gag escalates into a surprising, harmless comic situation.",
-        "audience": "Shorts viewers who enjoy visual comedy",
-    },
-    {
-        "name": "Fantasy Comedy",
-        "weight": 1.0,
-        "description": "An ordinary object gains a magical ability that causes comic trouble.",
-        "audience": "Kids and fantasy animation fans",
-    },
-    {
-        "name": "Village Comedy",
-        "weight": 1.0,
-        "description": "A village challenge turns into a playful contest with a clever twist.",
-        "audience": "Telugu audiences and family viewers",
-    },
-    {
-        "name": "Human and Animal Friendship",
-        "weight": 1.0,
-        "description": "A child and an animal work together to solve a small problem.",
-        "audience": "Family and animal-story viewers",
-    },
-    {
-        "name": "Festival Story",
-        "weight": 0.8,
-        "description": "A colorful celebration creates a funny, heartwarming surprise.",
-        "audience": "Families and festival-content viewers",
-    },
-    {
-        "name": "Mini Moral Story",
-        "weight": 0.8,
-        "description": "A small mistake leads to a funny discovery and a positive lesson.",
-        "audience": "Children and family audiences",
-    },
-    {
-        "name": "Human vs Technology",
-        "weight": 0.9,
-        "description": "A person tries to outsmart a clever gadget or robot, with a comic twist.",
-        "audience": "Young viewers interested in technology and comedy",
-    },
-]
-
-# A limited set of searches keeps the daily API usage predictable.
-# The query list is mixed-language and covers different formats.
 TREND_QUERIES = [
-    "Telugu comedy shorts",
-    "funny 3D animation shorts",
-    "kids funny animal cartoon",
-    "Indian family comedy shorts",
-    "school comedy shorts India",
-    "AI animation funny shorts",
-    "Telugu animated stories",
-    "funny fantasy animation shorts",
+    ("Telugu comedy shorts", "Telugu Baby and Family Comedy"),
+    ("funny 3D animation shorts", "Visual Slapstick"),
+    ("kids funny animal cartoon", "Animal Adventure"),
+    ("Indian family comedy shorts", "Telugu Baby and Family Comedy"),
+    ("school comedy shorts India", "School Comedy"),
+    ("AI animation funny shorts", "Human vs Technology"),
+    ("Telugu animated stories", "Mini Moral Story"),
+    ("Telugu festival shorts", "Festival Story"),
 ]
 
 
-# ---------------------------------------------------------
-# GENERAL HELPERS
-# ---------------------------------------------------------
-
-def utc_now():
+def now_utc():
     return datetime.now(timezone.utc)
-
-
-def clean_text(value):
-    """Normalize whitespace and remove empty values."""
-    if value is None:
-        return ""
-    return re.sub(r"\s+", " ", str(value)).strip()
-
-
-def normalized_words(value):
-    """Return a set of meaningful normalized words."""
-    value = clean_text(value).lower()
-    words = re.findall(r"[a-z0-9]+|[\u0C00-\u0C7F]+", value)
-
-    stop_words = {
-        "the", "and", "for", "with", "from", "this", "that",
-        "when", "what", "your", "you", "are", "was", "has",
-        "have", "into", "his", "her", "its", "their", "they",
-        "a", "an", "of", "to", "in", "on", "is", "it",
-        "shorts", "short", "video", "videos", "official",
-        "telugu", "funny", "new",
-    }
-
-    return {word for word in words if word not in stop_words}
-
-
-def similarity(text_a, text_b):
-    """Jaccard similarity between two text strings."""
-    a = normalized_words(text_a)
-    b = normalized_words(text_b)
-
-    if not a or not b:
-        return 0.0
-
-    return len(a & b) / len(a | b)
-
-
-def make_story_key(title, concept):
-    """Stable key for duplicate protection."""
-    normalized = (
-        clean_text(title).lower()
-        + "|"
-        + clean_text(concept).lower()
-    )
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def safe_int(value, default=0):
     try:
         return int(value or 0)
-    except (ValueError, TypeError):
+    except (TypeError, ValueError):
         return default
 
 
-# ---------------------------------------------------------
-# AUTHENTICATION
-# ---------------------------------------------------------
+def clean_text(value):
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
-def create_youtube_client():
-    token_json = os.getenv("YOUTUBE_TOKEN_JSON")
 
-    if not token_json:
-        raise RuntimeError(
-            "Missing GitHub Secret: YOUTUBE_TOKEN_JSON"
-        )
+def tokenize(value):
+    words = re.findall(r"[a-z0-9]+|[\u0C00-\u0C7F]+", clean_text(value).lower())
+    stop = {
+        "the", "and", "for", "with", "from", "this", "that", "when",
+        "what", "your", "you", "are", "was", "has", "have", "into",
+        "his", "her", "its", "they", "their", "a", "an", "of", "to",
+        "in", "on", "is", "it", "shorts", "short", "video", "videos",
+        "official", "viral", "new",
+    }
+    return {word for word in words if word not in stop and len(word) > 1}
 
+
+def similarity(a, b):
+    ta, tb = tokenize(a), tokenize(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def story_key(title, concept):
+    return hashlib.sha256(
+        (clean_text(title).lower() + "|" + clean_text(concept).lower()).encode("utf-8")
+    ).hexdigest()
+
+
+def youtube_client():
+    raw = os.getenv("YOUTUBE_TOKEN_JSON")
+    if not raw:
+        raise RuntimeError("Missing GitHub secret YOUTUBE_TOKEN_JSON.")
     try:
-        token_data = json.loads(token_json)
+        token = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            "YOUTUBE_TOKEN_JSON is not valid JSON. "
-            "Use the contents of your authorized token.json file."
-        ) from exc
+        raise RuntimeError("YOUTUBE_TOKEN_JSON must contain valid token.json JSON.") from exc
 
-    scopes = [
-        "https://www.googleapis.com/auth/youtube.readonly",
-        "https://www.googleapis.com/auth/yt-analytics.readonly",
-    ]
-
-    credentials = Credentials.from_authorized_user_info(
-        token_data,
-        scopes=scopes,
-    )
-
-    return build(
-        "youtube",
-        "v3",
-        credentials=credentials,
-        cache_discovery=False,
-    )
+    credentials = Credentials.from_authorized_user_info(token)
+    return build("youtube", "v3", credentials=credentials, cache_discovery=False)
 
 
-def create_supabase_client():
+def supabase_client():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SECRET_KEY")
-
     if not url or not key:
-        raise RuntimeError(
-            "Missing SUPABASE_URL or SUPABASE_SECRET_KEY."
-        )
-
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SECRET_KEY.")
     return create_client(url, key)
 
 
-# ---------------------------------------------------------
-# CHANNEL PERFORMANCE
-# ---------------------------------------------------------
-
-def fetch_own_channel_videos(youtube):
-    """
-    Fetch recent videos from the authenticated channel.
-    Public Data API statistics are used as a performance proxy.
-    """
-    videos = []
-
+def published_age_days(published_at):
     try:
-        channel_response = youtube.channels().list(
-            part="contentDetails,snippet",
-            mine=True,
-            maxResults=1,
-        ).execute()
+        published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        return max(1, (now_utc() - published).days)
+    except (ValueError, AttributeError):
+        return 7
 
-        channel_items = channel_response.get("items", [])
 
-        if not channel_items:
-            log.warning(
-                "The authenticated YouTube account returned no channel."
-            )
+def fetch_own_videos(yt):
+    videos = []
+    try:
+        channels = yt.channels().list(part="contentDetails", mine=True, maxResults=1).execute()
+        items = channels.get("items", [])
+        if not items:
+            log.warning("Authenticated account returned no YouTube channel.")
             return videos
 
-        channel = channel_items[0]
-        uploads_playlist = (
-            channel.get("contentDetails", {})
-            .get("relatedPlaylists", {})
-            .get("uploads")
-        )
-
-        if not uploads_playlist:
-            log.warning("Could not find the channel uploads playlist.")
-            return videos
-
-        playlist_response = youtube.playlistItems().list(
-            part="contentDetails",
-            playlistId=uploads_playlist,
-            maxResults=min(MAX_OWN_VIDEOS, 50),
+        playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        playlist = yt.playlistItems().list(
+            part="contentDetails", playlistId=playlist_id, maxResults=MAX_OWN_VIDEOS
         ).execute()
-
-        video_ids = [
-            item.get("contentDetails", {}).get("videoId")
-            for item in playlist_response.get("items", [])
+        ids = [
+            x.get("contentDetails", {}).get("videoId")
+            for x in playlist.get("items", [])
         ]
-        video_ids = [video_id for video_id in video_ids if video_id]
-
-        if not video_ids:
+        ids = [x for x in ids if x]
+        if not ids:
             return videos
 
-        stats_response = youtube.videos().list(
-            part="snippet,statistics,contentDetails",
-            id=",".join(video_ids),
-            maxResults=50,
+        response = yt.videos().list(
+            part="snippet,statistics", id=",".join(ids), maxResults=50
         ).execute()
 
-        for item in stats_response.get("items", []):
+        for item in response.get("items", []):
             snippet = item.get("snippet", {})
             stats = item.get("statistics", {})
-
-            published_at = snippet.get("publishedAt")
-            age_days = 7
-
-            if published_at:
-                try:
-                    published = datetime.fromisoformat(
-                        published_at.replace("Z", "+00:00")
-                    )
-                    age_days = max(
-                        1,
-                        (utc_now() - published).days,
-                    )
-                except ValueError:
-                    pass
-
+            age = published_age_days(snippet.get("publishedAt"))
             views = safe_int(stats.get("viewCount"))
-
             videos.append({
                 "video_id": item.get("id"),
                 "title": clean_text(snippet.get("title")),
-                "description": clean_text(
-                    snippet.get("description", "")
-                )[:500],
                 "views": views,
                 "likes": safe_int(stats.get("likeCount")),
-                "comments": safe_int(stats.get("commentCount")),
-                "published_at": published_at,
-                "age_days": age_days,
-                "views_per_day": views / age_days,
+                "age_days": age,
+                "views_per_day": views / age,
             })
-
-        videos.sort(
-            key=lambda video: video["views_per_day"],
-            reverse=True,
-        )
-
-        log.info("Loaded %s recent channel videos.", len(videos))
-
     except HttpError as exc:
-        log.warning("Could not fetch channel videos: %s", exc)
+        log.warning("Channel performance request failed: %s", exc)
 
-    return videos
-
-
-def analyze_channel_performance(own_videos):
-    """
-    Summarize top-performing recent videos by views per day.
-    This is a directional signal, not a full retention analysis.
-    """
-    if not own_videos:
-        return {
-            "status": "unavailable",
-            "summary": "No channel performance data was available.",
-            "top_formats": [],
-            "top_video_titles": [],
-        }
-
-    top_videos = own_videos[:10]
-
-    format_keywords = {
-        "Telugu Family Comedy": [
-            "family", "amma", "nanna", "mother", "father",
-            "brother", "sister", "telugu family",
-        ],
-        "School Comedy": [
-            "school", "teacher", "student", "classroom", "exam",
-        ],
-        "Animal Adventure": [
-            "bear", "cat", "dog", "squirrel", "rabbit", "animal",
-            "monkey", "bird", "puppy", "kitten",
-        ],
-        "Visual Slapstick": [
-            "balloon", "fall", "funny", "crazy", "kite", "prank",
-        ],
-        "Fantasy Comedy": [
-            "magic", "magical", "dragon", "wizard", "fantasy",
-        ],
-        "Village Comedy": [
-            "village", "farmer", "village comedy",
-        ],
-        "Human and Animal Friendship": [
-            "friend", "rescue", "boy and dog", "girl and cat",
-        ],
-        "Festival Story": [
-            "festival", "diwali", "bonalu", "ganesha", "holi",
-            "sankranti", "dasara",
-        ],
-        "Mini Moral Story": [
-            "moral", "lesson", "kindness", "honesty",
-        ],
-        "Human vs Technology": [
-            "robot", "ai", "technology", "gadget",
-        ],
-    }
-
-    format_scores = Counter()
-
-    for video in top_videos:
-        title = video["title"].lower()
-        score = max(1.0, video["views_per_day"])
-
-        for format_name, keywords in format_keywords.items():
-            if any(keyword in title for keyword in keywords):
-                format_scores[format_name] += score
-
-    return {
-        "status": "available",
-        "summary": (
-            "Channel performance is ranked by views per day "
-            "for recent uploads. Retention data is not used by "
-            "this script."
-        ),
-        "top_formats": [
-            name for name, _ in format_scores.most_common(5)
-        ],
-        "top_video_titles": [
-            video["title"] for video in top_videos[:5]
-        ],
-    }
+    return sorted(videos, key=lambda x: x["views_per_day"], reverse=True)
 
 
-# ---------------------------------------------------------
-# EXTERNAL TREND RESEARCH
-# ---------------------------------------------------------
+def infer_format(text):
+    lowered = clean_text(text).lower()
+    best_name, best_score = None, 0
+    for name, spec in STORY_FORMATS.items():
+        score = sum(1 for keyword in spec["keywords"] if keyword.lower() in lowered)
+        if score > best_score:
+            best_name, best_score = name, score
+    return best_name
 
-def fetch_external_trends(youtube):
-    """
-    Search a small number of recent public YouTube videos.
 
-    Search ordering is not an official trending ranking.
-    We calculate a rough view-velocity signal from public
-    statistics and video age.
-    """
-    all_results = []
-    searches_used = 0
+def channel_format_scores(videos):
+    scores = Counter()
+    for video in videos:
+        fmt = infer_format(video["title"])
+        if fmt:
+            # Diminishing returns prevent one huge video dominating every decision.
+            scores[fmt] += min(3.0, video["views_per_day"] / 100.0)
+    return scores
 
-    # Rotate the starting query based on the day so the system
-    # samples different categories across runs.
-    day_number = utc_now().timetuple().tm_yday
-    rotated_queries = (
-        TREND_QUERIES[day_number % len(TREND_QUERIES):]
-        + TREND_QUERIES[:day_number % len(TREND_QUERIES)]
-    )
 
-    selected_queries = rotated_queries[:TREND_SEARCHES_PER_RUN]
+def fetch_external_trends(yt):
+    today_index = now_utc().timetuple().tm_yday % len(TREND_QUERIES)
+    rotated = TREND_QUERIES[today_index:] + TREND_QUERIES[:today_index]
+    selected_queries = rotated[:SEARCH_QUERIES_PER_RUN]
+    trend_videos = []
+    query_format_scores = Counter()
 
-    for query in selected_queries:
+    for query, expected_format in selected_queries:
         try:
-            response = youtube.search().list(
+            response = yt.search().list(
                 part="snippet",
                 q=query,
                 type="video",
                 order="date",
-                publishedAfter=(
-                    utc_now() - timedelta(days=14)
-                ).isoformat().replace("+00:00", "Z"),
+                publishedAfter=(now_utc() - timedelta(days=14)).isoformat().replace("+00:00", "Z"),
                 regionCode=REGION_CODE,
-                relevanceLanguage="te",
                 safeSearch="strict",
-                maxResults=5,
+                maxResults=SEARCH_RESULTS_PER_QUERY,
             ).execute()
-
-            searches_used += 1
+            query_format_scores[expected_format] += 0.5
 
             for item in response.get("items", []):
-                video_id = item.get("id", {}).get("videoId")
+                vid = item.get("id", {}).get("videoId")
                 snippet = item.get("snippet", {})
-
-                if not video_id:
+                if not vid:
                     continue
-
-                all_results.append({
-                    "video_id": video_id,
+                trend_videos.append({
+                    "video_id": vid,
                     "title": clean_text(snippet.get("title")),
-                    "channel_title": clean_text(
-                        snippet.get("channelTitle")
-                    ),
+                    "channel_title": clean_text(snippet.get("channelTitle")),
                     "published_at": snippet.get("publishedAt"),
-                    "query": query,
+                    "query_format": expected_format,
                 })
-
         except HttpError as exc:
-            log.warning(
-                "Trend search failed for '%s': %s",
-                query,
-                exc,
-            )
+            log.warning("Trend search failed for %s: %s", query, exc)
 
-    # Remove duplicate search results.
-    unique_results = {}
-    for result in all_results:
-        unique_results[result["video_id"]] = result
+    unique = {v["video_id"]: v for v in trend_videos}
+    trend_videos = list(unique.values())
 
-    results = list(unique_results.values())
-
-    # Fetch statistics in one request instead of one request
-    # per video.
-    if results:
+    # videos.list accepts up to 50 IDs per call.
+    if trend_videos:
         try:
-            stats_response = youtube.videos().list(
+            response = yt.videos().list(
                 part="statistics,snippet",
-                id=",".join(
-                    result["video_id"] for result in results[:50]
-                ),
+                id=",".join(v["video_id"] for v in trend_videos[:50]),
                 maxResults=50,
             ).execute()
+            stats = {x["id"]: x for x in response.get("items", [])}
 
-            stats_by_id = {
-                item["id"]: item
-                for item in stats_response.get("items", [])
-            }
-
-            for result in results:
-                item = stats_by_id.get(result["video_id"], {})
-                stats = item.get("statistics", {})
-
-                result["views"] = safe_int(stats.get("viewCount"))
-                result["likes"] = safe_int(stats.get("likeCount"))
-                result["comments"] = safe_int(
-                    stats.get("commentCount")
+            for video in trend_videos:
+                item = stats.get(video["video_id"], {})
+                counts = item.get("statistics", {})
+                video["views"] = safe_int(counts.get("viewCount"))
+                video["likes"] = safe_int(counts.get("likeCount"))
+                video["views_per_day"] = video["views"] / published_age_days(video.get("published_at"))
+                inferred = infer_format(video["title"])
+                video["inferred_format"] = inferred or video["query_format"]
+                query_format_scores[video["inferred_format"]] += min(
+                    3.0, video["views_per_day"] / 100.0
                 )
-
-                age_days = 7
-                published_at = result.get("published_at")
-
-                if published_at:
-                    try:
-                        published = datetime.fromisoformat(
-                            published_at.replace("Z", "+00:00")
-                        )
-                        age_days = max(
-                            1,
-                            (utc_now() - published).days,
-                        )
-                    except ValueError:
-                        pass
-
-                result["age_days"] = age_days
-                result["views_per_day"] = (
-                    result["views"] / age_days
-                )
-
         except HttpError as exc:
-            log.warning("Could not fetch trend statistics: %s", exc)
+            log.warning("External trend statistics request failed: %s", exc)
 
-    results.sort(
-        key=lambda item: item.get("views_per_day", 0),
-        reverse=True,
+    trend_videos.sort(key=lambda x: x.get("views_per_day", 0), reverse=True)
+    return trend_videos[:20], query_format_scores
+
+
+def fetch_history(sb):
+    response = (
+        sb.table("story_history")
+        .select("story_key,title,concept,hook,ending,status,created_at")
+        .order("created_at", desc=True)
+        .limit(MAX_HISTORY_ROWS)
+        .execute()
     )
-
-    log.info(
-        "Trend research used %s search calls and found %s videos.",
-        searches_used,
-        len(results),
-    )
-
-    return results[:MAX_EXTERNAL_RESULTS]
+    return response.data or []
 
 
-def summarize_trends(trend_videos):
-    if not trend_videos:
-        return {
-            "status": "unavailable",
-            "summary": "External trend data was unavailable.",
-            "topics": [],
-            "source_video_titles": [],
-        }
+def make_script(format_name):
+    spec = STORY_FORMATS[format_name]
+    scene_beats = spec["scenes"]
+    scene_durations = [5, 12, 13, 15]
+    scenes = []
 
-    topic_counter = Counter()
+    for idx, (beat, visual, dialogue, action) in enumerate(scene_beats):
+        scenes.append({
+            "scene_number": idx + 1,
+            "scene_name": beat,
+            "duration_seconds": scene_durations[idx],
+            "timecode": None,  # Filled by validator.
+            "location": spec["setting"],
+            "visual_direction": visual,
+            "character_action_and_expression": action,
+            "camera_direction": [
+                "Vertical 9:16 framing; start with a readable close-up and establish the location.",
+                "Use a medium shot to show both the character and the cause of the problem.",
+                "Use a close-up/reaction shot; keep screen direction and prop positions consistent.",
+                "Hold the final reaction long enough for the punchline to land; end cleanly.",
+            ][idx],
+            "dialogue_telugu": dialogue,
+            "dialogue_speaker": [
+                ["Amma", "Chinnu"], ["Chinnu"], ["Amma", "Chinnu"], ["Amma", "Chinnu"]
+            ][idx] if format_name == "Telugu Baby and Family Comedy" else [],
+            "voice_direction": [
+                "Quick, curious delivery; make the hook immediately understandable.",
+                "Natural conversational Telugu; do not rush the words.",
+                "Increase comic tension, then leave a short reaction pause.",
+                "Deliver the punchline clearly; finish with a warm, expressive reaction.",
+            ][idx],
+            "audio": {
+                "dialogue": "Record clean Telugu dialogue; dialogue must remain intelligible over music.",
+                "music": ["Light playful opening", "Bouncy comic bed", "Brief tension build", "Short upbeat payoff"][idx],
+                "sound_effects": [
+                    "Soft opening pop or room tone",
+                    "Subtle movement sound matched to the action",
+                    "One synchronized comic accent; avoid excessive effects",
+                    "Gentle comic sting, then a clean audio tail",
+                ][idx],
+            },
+            "transition": "Use a simple continuous cut; do not change location or character design.",
+        })
 
-    # Extract general topic signals from titles.
-    for video in trend_videos:
-        for word in normalized_words(video["title"]):
-            if len(word) >= 4:
-                topic_counter[word] += max(
-                    1.0,
-                    video.get("views_per_day", 0),
-                )
+    # Set speaker labels for every format, using character names in the authored line.
+    dialogue_speakers = {
+        "Telugu Baby and Family Comedy": ["Amma", "Chinnu", "Amma", "Amma"],
+        "School Comedy": ["Balu", "Teacher", "Balu", "Teacher"],
+        "Animal Adventure": ["Mintu", "Mintu", "Mintu", "Mintu"],
+        "Visual Slapstick": ["Raju", "Raju", "Raju", "Raju"],
+        "Fantasy Comedy": ["Tara", "Tara", "Tara", "Tara"],
+        "Village Comedy": ["Ramu", "Ramu", "Ramu", "Ramu"],
+        "Human and Animal Friendship": ["Anu", "Anu", "Anu", "Anu"],
+        "Festival Story": ["Chinni", "Chinni", "Chinni", "Grandmother"],
+        "Mini Moral Story": ["Kiran", "Kiran", "Kiran", "Friend"],
+        "Human vs Technology": ["Lok", "Lok", "Lok", "Lok"],
+    }
+    for scene, speaker in zip(scenes, dialogue_speakers[format_name]):
+        scene["dialogue_speaker"] = speaker
 
     return {
-        "status": "available",
-        "summary": (
-            "Recent public videos were sampled from YouTube search. "
-            "Scores use views per day as a rough proxy, not an "
-            "official trend ranking."
-        ),
-        "topics": [
-            word for word, _ in topic_counter.most_common(12)
+        "language": "Natural spoken Telugu",
+        "production_instruction_language": "English",
+        "target_duration_seconds": TARGET_DURATION,
+        "aspect_ratio": "9:16",
+        "visual_style": "Original high-quality cinematic 3D family animation",
+        "character_bible": spec["characters"],
+        "location_and_continuity": spec["setting"],
+        "global_continuity_rules": [
+            "Use exactly the character designs listed in character_bible.",
+            "Keep clothing, colors, props, lighting, and location consistent across all scenes.",
+            "Do not introduce a new speaking character without updating the character bible.",
+            "Every action must follow logically from the previous scene.",
+            "Keep all physical comedy harmless and family-friendly.",
+            "Do not add on-screen text, captions, logos, or watermarks unless explicitly requested.",
+            "Generate original visuals and dialogue; do not reproduce source videos.",
         ],
-        "source_video_titles": [
-            {
-                "title": video["title"],
-                "views": video.get("views", 0),
-                "views_per_day": round(
-                    video.get("views_per_day", 0), 2
-                ),
-                "url": (
-                    "https://www.youtube.com/watch?v="
-                    + video["video_id"]
-                ),
-            }
-            for video in trend_videos[:8]
-        ],
+        "scenes": scenes,
+        "ending_instruction": "The final scene must resolve the setup and end with a clear visual or verbal punchline.",
     }
 
 
-# ---------------------------------------------------------
-# SUPABASE STORY HISTORY
-# ---------------------------------------------------------
+def validate_script(script):
+    errors = []
+    scenes = script.get("scenes", [])
 
-def fetch_story_history(supabase):
-    try:
-        response = (
-            supabase.table("story_history")
-            .select("story_key,title,concept,hook,ending,status,created_at")
-            .order("created_at", desc=True)
-            .limit(MAX_HISTORY_ROWS)
-            .execute()
-        )
+    if script.get("target_duration_seconds") != TARGET_DURATION:
+        errors.append("Target duration must be exactly 45 seconds.")
+    if len(scenes) < 4:
+        errors.append("At least four scenes are required.")
+    if not script.get("character_bible"):
+        errors.append("Character bible is missing.")
 
-        return response.data or []
-
-    except Exception as exc:
-        log.error(
-            "Unable to read story_history. Check table columns "
-            "and Supabase permissions: %s",
-            exc,
-        )
-        raise
-
-
-# ---------------------------------------------------------
-# STORY CANDIDATE GENERATION
-# ---------------------------------------------------------
-
-def choose_trend_topic(trend_summary, index):
-    topics = trend_summary.get("topics", [])
-
-    if not topics:
-        fallback_topics = [
-            "a surprising challenge",
-            "a mysterious object",
-            "an unexpected friendship",
-            "a funny competition",
-            "a clever solution",
+    total = 0
+    previous_end = 0
+    for i, scene in enumerate(scenes, start=1):
+        required = [
+            "scene_number", "scene_name", "duration_seconds", "visual_direction",
+            "character_action_and_expression", "camera_direction", "dialogue_telugu",
+            "dialogue_speaker", "voice_direction", "audio", "transition",
         ]
-        return fallback_topics[index % len(fallback_topics)]
+        for field in required:
+            if not scene.get(field):
+                errors.append(f"Scene {i}: missing {field}.")
 
-    return topics[index % len(topics)]
+        duration = safe_int(scene.get("duration_seconds"))
+        if duration <= 0:
+            errors.append(f"Scene {i}: duration must be positive.")
+        total += duration
+        scene["timecode"] = f"{previous_end:02d}-{previous_end + duration:02d}s"
+        previous_end += duration
+
+        dialogue = clean_text(scene.get("dialogue_telugu"))
+        if len(dialogue) < 4:
+            errors.append(f"Scene {i}: Telugu dialogue is missing or too short.")
+        if not re.search(r"[\u0C00-\u0C7F]", dialogue):
+            errors.append(f"Scene {i}: dialogue must contain Telugu script.")
+
+        if not scene.get("dialogue_speaker"):
+            errors.append(f"Scene {i}: dialogue speaker is missing.")
+
+    if total != TARGET_DURATION:
+        errors.append(
+            f"Scene durations total {total} seconds, expected {TARGET_DURATION}."
+        )
+
+    char_names = [
+        clean_text(c.get("name"))
+        for c in script.get("character_bible", [])
+        if clean_text(c.get("name"))
+    ]
+    if len(char_names) != len(set(char_names)):
+        errors.append("Character bible contains duplicate names.")
+
+    return {"valid": len(errors) == 0, "errors": errors, "total_duration_seconds": total}
 
 
-def create_candidates(
-    trend_summary,
-    channel_summary,
-    history,
-):
-    """
-    Create original concept combinations using trend topic
-    signals and varied story formats. No external video's
-    script, characters, or title is copied.
-    """
+def build_candidates(own_videos, external_scores, history):
+    own_scores = channel_format_scores(own_videos)
+    max_own = max(own_scores.values(), default=1.0)
+    max_external = max(external_scores.values(), default=1.0)
+
+    # Count formats recently used, based on title/concept text.
+    recent_usage = Counter()
+    for old in history[:20]:
+        text = " ".join([
+            clean_text(old.get("title")),
+            clean_text(old.get("concept")),
+        ])
+        fmt = infer_format(text)
+        if fmt:
+            recent_usage[fmt] += 1
+
     candidates = []
-    top_formats = channel_summary.get("top_formats", [])
+    for format_name, spec in STORY_FORMATS.items():
+        channel_signal = own_scores.get(format_name, 0) / max_own if own_scores else 0.35
+        trend_signal = external_scores.get(format_name, 0) / max_external if external_scores else 0.25
+        novelty_signal = 1.0 / (1.0 + recent_usage[format_name])
+        variety_signal = 1.0 / (1.0 + recent_usage[format_name])
 
-    # Prioritize strong formats, but preserve variety.
-    ordered_formats = sorted(
-        FORMATS,
-        key=lambda item: (
-            0 if item["name"] in top_formats else 1,
-            -item["weight"],
-            item["name"],
-        ),
-    )
-
-    topic_count = max(
-        1,
-        len(trend_summary.get("topics", [])),
-    )
-
-    for index, story_format in enumerate(ordered_formats):
-        topic = choose_trend_topic(trend_summary, index)
-
-        # Create a story premise from the topic signal.
-        concept = (
-            f"{story_format['description']} "
-            f"Use the broad topic signal '{topic}' as inspiration, "
-            "with original characters, events, and a new punchline."
+        score = (
+            0.40 * channel_signal
+            + 0.30 * trend_signal
+            + 0.20 * novelty_signal
+            + 0.10 * variety_signal
         )
 
-        # Keep titles original and avoid simply copying trending titles.
-        title_templates = [
-            "The Unexpected Challenge",
-            "The Funniest Plan Ever",
-            "A Tiny Problem, A Huge Surprise",
-            "The Secret Behind the Mix-Up",
-            "The Most Unbelievable Contest",
-            "One Small Mistake",
-            "The Surprise Nobody Expected",
-            "The Cleverest Trick",
-            "A Very Strange Discovery",
-            "The Great Last-Second Twist",
-        ]
-
-        title_seed = (
-            f"{story_format['name']}|{topic}|"
-            f"{utc_now().date().isoformat()}"
-        )
-        seed = int(
-            hashlib.sha256(title_seed.encode()).hexdigest()[:8],
-            16,
-        )
-        title = title_templates[seed % len(title_templates)]
-
-        # Add format and topic so each concept is distinguishable.
-        title = f"{title} — {story_format['name']}"
-
-        hook = (
-            f"What happens when {topic} becomes the center "
-            "of an unexpected problem?"
-        )
-
-        ending = (
-            "Finish with a surprising visual reveal, a clear "
-            "comic payoff, and a satisfying final reaction."
-        )
-
-        story_key = make_story_key(title, concept)
-
-        # Similarity-based duplicate protection.
-        is_duplicate = False
-        for old_story in history:
-            old_text = " ".join([
-                clean_text(old_story.get("title")),
-                clean_text(old_story.get("concept")),
-            ])
-            new_text = title + " " + concept
-
-            if (
-                old_story.get("story_key") == story_key
-                or similarity(new_text, old_text) >= 0.72
-            ):
-                is_duplicate = True
-                break
-
-        if is_duplicate:
+        script = make_script(format_name)
+        validation = validate_script(script)
+        if not validation["valid"]:
+            log.warning("Rejecting %s: %s", format_name, validation["errors"])
             continue
 
-        # Proposed scoring weights:
-        # 40% channel performance, 30% outside trends,
-        # 20% novelty, 10% variety.
-        #
-        # These are initial heuristics, not proven optimal weights.
-
-        channel_score = (
-            1.0 if story_format["name"] in top_formats else 0.45
+        concept = (
+            f"Original {format_name} short. "
+            f"Core setup: {spec['scenes'][0][1]} "
+            f"Resolution: {spec['scenes'][3][1]}"
         )
+        title = {
+            "Telugu Baby and Family Comedy": "The Little Secret — Telugu Family Comedy",
+            "School Comedy": "Homework Has a Mind of Its Own — School Comedy",
+            "Animal Adventure": "Mintu and the Giant Nut — Animal Adventure",
+            "Visual Slapstick": "The Balloon Boss — Visual Comedy",
+            "Fantasy Comedy": "The Wand That Did the Wrong Thing — Fantasy Comedy",
+            "Village Comedy": "The Giant Watermelon Problem — Village Comedy",
+            "Human and Animal Friendship": "A Tiny Friend in Need — Friendship Story",
+            "Festival Story": "The Flower Crown Surprise — Festival Story",
+            "Mini Moral Story": "The Honest Little Fix — Moral Story",
+            "Human vs Technology": "The Robot's Extra Task — Tech Comedy",
+        }[format_name]
 
-        trend_score = (
-            1.0 if trend_summary.get("status") == "available"
-            else 0.25
-        )
-
-        # The novelty score is higher when the selected concept
-        # is not very similar to the latest story history.
-        max_similarity = 0.0
-        for old_story in history[:30]:
+        story_text = title + " " + concept
+        duplicate = False
+        for old in history:
             old_text = " ".join([
-                clean_text(old_story.get("title")),
-                clean_text(old_story.get("concept")),
+                clean_text(old.get("title")),
+                clean_text(old.get("concept")),
             ])
-            max_similarity = max(
-                max_similarity,
-                similarity(title + " " + concept, old_text),
-            )
-
-        novelty_score = max(0.0, 1.0 - max_similarity)
-
-        # Reward less-recently-used formats.
-        recent_format_count = sum(
-            1 for old_story in history[:20]
-            if story_format["name"].lower()
-            in (
-                clean_text(old_story.get("title")).lower()
-                + " "
-                + clean_text(old_story.get("concept")).lower()
-            )
-        )
-        variety_score = 1.0 / (1.0 + recent_format_count)
-
-        total_score = (
-            0.40 * channel_score
-            + 0.30 * trend_score
-            + 0.20 * novelty_score
-            + 0.10 * variety_score
-        )
+            if (
+                old.get("story_key") == story_key(title, concept)
+                or similarity(story_text, old_text) >= 0.72
+            ):
+                duplicate = True
+                break
+        if duplicate:
+            continue
 
         candidates.append({
-            "story_key": story_key,
+            "story_key": story_key(title, concept),
             "title": title,
             "concept": concept,
-            "hook": hook,
-            "ending": ending,
-            "format": story_format["name"],
-            "audience": story_format["audience"],
-            "trend_topic": topic,
-            "score": round(total_score, 4),
+            "hook": script["scenes"][0]["dialogue_telugu"],
+            "ending": script["scenes"][-1]["dialogue_telugu"],
+            "format": format_name,
+            "audience": "Telugu-speaking family and Shorts audiences",
+            "trend_topic": format_name,
+            "score": round(score, 4),
             "score_breakdown": {
-                "channel_performance": round(channel_score, 3),
-                "external_trends": round(trend_score, 3),
-                "novelty": round(novelty_score, 3),
-                "format_variety": round(variety_score, 3),
+                "channel_performance": round(channel_signal, 3),
+                "external_trends": round(trend_signal, 3),
+                "novelty": round(novelty_signal, 3),
+                "format_variety": round(variety_signal, 3),
             },
-            "script": {
-                "language": "Telugu",
-                "format": story_format["name"],
-                "target_duration_seconds": 30,
-                "visual_style": (
-                    "Original high-quality cinematic 3D family animation"
-                ),
-                "trend_inspiration": topic,
-                "originality_note": (
-                    "Create original characters, dialogue, visuals, "
-                    "and story events. Do not copy the source videos."
-                ),
-                "scenes": [
-                    {
-                        "scene": 1,
-                        "duration_seconds": 5,
-                        "purpose": "Immediate visual hook",
-                        "visual": (
-                            f"Introduce the main character and the "
-                            f"unexpected problem inspired by {topic}."
-                        ),
-                        "dialogue_telugu": "",
-                        "audio": "Playful opening sound effect",
-                    },
-                    {
-                        "scene": 2,
-                        "duration_seconds": 8,
-                        "purpose": "Escalation",
-                        "visual": (
-                            "The character tries a funny solution, "
-                            "but the situation becomes more surprising."
-                        ),
-                        "dialogue_telugu": "",
-                        "audio": "Light comic music and synchronized effects",
-                    },
-                    {
-                        "scene": 3,
-                        "duration_seconds": 8,
-                        "purpose": "Biggest comic moment",
-                        "visual": (
-                            "A clear visual gag reveals the main "
-                            "problem in an exaggerated but harmless way."
-                        ),
-                        "dialogue_telugu": "",
-                        "audio": "Comic impact sound and character reaction",
-                    },
-                    {
-                        "scene": 4,
-                        "duration_seconds": 9,
-                        "purpose": "Twist and payoff",
-                        "visual": (
-                            "Reveal an unexpected solution or reversal "
-                            "and end on a memorable character reaction."
-                        ),
-                        "dialogue_telugu": "",
-                        "audio": "Short musical payoff and clean ending",
-                    },
-                ],
-            },
+            "script": script,
+            "validation": validation,
         })
 
-    candidates.sort(
-        key=lambda candidate: candidate["score"],
-        reverse=True,
-    )
-
-    return candidates
+    return sorted(candidates, key=lambda x: x["score"], reverse=True)
 
 
-# ---------------------------------------------------------
-# SAVE STORY
-# ---------------------------------------------------------
-
-def save_story(supabase, story):
-    """
-    Insert a planned story into the existing story_history table.
-    The script JSON is stored in the JSONB script column.
-    """
+def save_story(sb, story):
+    # Match the existing story_history schema.
     record = {
         "story_key": story["story_key"],
         "title": story["title"],
@@ -909,122 +658,84 @@ def save_story(supabase, story):
         "script": story["script"],
         "status": "planned",
     }
-
-    response = (
-        supabase.table("story_history")
-        .insert(record)
-        .execute()
-    )
-
+    response = sb.table("story_history").insert(record).execute()
     if not response.data:
-        raise RuntimeError(
-            "Supabase did not return a saved story record."
-        )
-
+        raise RuntimeError("Supabase did not confirm the story insert.")
     return response.data[0]
 
 
-def write_json(payload):
-    OUTPUT_FILE.write_text(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    log.info("Saved output file: %s", OUTPUT_FILE)
-
-
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
-
 def main():
-    started_at = utc_now()
+    started = now_utc()
+    yt = youtube_client()
+    sb = supabase_client()
 
-    log.info("Starting AIKidVerse1 trend-based story planner.")
+    own_videos = fetch_own_videos(yt)
+    external_videos, external_scores = fetch_external_trends(yt)
+    history = fetch_history(sb)
 
-    youtube = create_youtube_client()
-    supabase = create_supabase_client()
-
-    # 1. Analyze own channel.
-    own_videos = fetch_own_channel_videos(youtube)
-    channel_summary = analyze_channel_performance(own_videos)
-
-    # 2. Research external videos.
-    trend_videos = fetch_external_trends(youtube)
-    trend_summary = summarize_trends(trend_videos)
-
-    # 3. Load recent story history.
-    history = fetch_story_history(supabase)
-
-    # 4. Create and score original story briefs.
-    candidates = create_candidates(
-        trend_summary,
-        channel_summary,
-        history,
-    )
-
+    candidates = build_candidates(own_videos, external_scores, history)
     if not candidates:
         raise RuntimeError(
-            "No new story candidates survived duplicate checks. "
-            "Run again later or review recent story history."
+            "No valid non-duplicate candidates were found. "
+            "Check story history or run again after reviewing duplicates."
         )
 
     selected = candidates[0]
-
-    # Attach the evidence used to select the story.
     selected["selection"] = {
-        "selected_at_utc": utc_now().isoformat(),
-        "planner_version": "2.0",
+        "planner_version": "3.0",
+        "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
-        "channel_analysis": channel_summary,
-        "trend_analysis": trend_summary,
-        "trend_sources": trend_summary.get(
-            "source_video_titles", []
-        ),
-        "own_channel_sample": [
+        "channel_video_sample": [
             {
-                "title": video["title"],
-                "views": video["views"],
-                "views_per_day": round(
-                    video["views_per_day"], 2
-                ),
+                "title": v["title"],
+                "views": v["views"],
+                "views_per_day": round(v["views_per_day"], 2),
             }
-            for video in own_videos[:10]
+            for v in own_videos[:10]
+        ],
+        "external_trend_sample": [
+            {
+                "title": v["title"],
+                "views": v.get("views", 0),
+                "views_per_day": round(v.get("views_per_day", 0), 2),
+                "url": "https://www.youtube.com/watch?v=" + v["video_id"],
+            }
+            for v in external_videos[:10]
         ],
         "history_rows_checked": len(history),
         "candidate_count": len(candidates),
-        "run_duration_seconds": round(
-            (utc_now() - started_at).total_seconds(), 2
-        ),
+        "run_duration_seconds": round((now_utc() - started).total_seconds(), 2),
         "limitations": [
-            "Trend scores use public video views per day as a proxy.",
-            "YouTube search results are not an official trending ranking.",
-            "The planner does not use private retention analytics.",
-            "Story briefs use templates and do not require a paid AI model.",
-            "Final video generation, voice, editing, and upload are separate steps.",
+            "Trend results are public YouTube search samples, not an official trending ranking.",
+            "Public views per day are only a rough trend signal.",
+            "Scripts are generated from authored templates, not a generative AI model.",
+            "Quality checks validate structure and Telugu-script presence, not perfect grammar.",
+            "Video generation, voice synthesis, editing, and publishing are separate workflow stages.",
         ],
     }
 
-    # 5. Save the selected story to Supabase.
-    saved_record = save_story(supabase, selected)
+    validation = validate_script(selected["script"])
+    selected["validation"] = validation
+    if not validation["valid"]:
+        raise RuntimeError("Final script validation failed: " + "; ".join(validation["errors"]))
+
+    saved = save_story(sb, selected)
     selected["database"] = {
         "table": "story_history",
         "status": "saved",
-        "record_id": saved_record.get("id"),
+        "record_id": saved.get("id"),
     }
 
-    # 6. Write a local artifact for the next workflow step.
-    write_json(selected)
+    OUTPUT_FILE.write_text(
+        json.dumps(selected, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
-    log.info("Story selected: %s", selected["title"])
-    log.info("Format: %s", selected["format"])
-    log.info("Score: %.4f", selected["score"])
-    log.info("Planner completed successfully.")
+    log.info("Selected story: %s", selected["title"])
+    log.info("Format: %s | score: %.3f", selected["format"], selected["score"])
+    log.info("Script validation: PASS | duration: %ss", validation["total_duration_seconds"])
+    log.info("Saved to Supabase and %s", OUTPUT_FILE)
 
 
 if __name__ == "__main__":
