@@ -1,0 +1,40 @@
+
+name: AIKidVerse1 Video Prototype
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: python -m pip install Pillow
+
+      - name: Generate and validate video
+        run: python make_video.py
+
+      - name: Upload generated Short
+        uses: actions/upload-artifact@v4
+        with:
+          name: aikidverse1-video-prototype
+          path: output/aikidverse1_test_short.mp4
+          retention-days: 3
