@@ -1,6 +1,6 @@
 """
-AIKidVerse1 Story Planner v3.2
-Free, template-driven Telugu Shorts planner with stronger quality gates.
+AIKidVerse1 Story Planner v3.5
+Free, template-driven Telugu Shorts planner with stronger story continuity gates.
 
 Inputs:
   SUPABASE_URL
@@ -157,10 +157,10 @@ STORY_FORMATS = {
         ],
         "setting": "One decorated home entrance with flowers, rangoli, and warm festive lights. Keep decorations stable across scenes.",
         "scenes": [
-            ("Hook", "Chinni stands proudly beside a colorful rangoli and holds a flower basket.", "నానమ్మా, నా అలంకరణ ఎలా ఉంది?", "Grandmother admires the design."),
-            ("Setup", "Chinni carefully places one final flower, then steps back to admire the rangoli.", "ఇప్పుడు ఇది పర్ఫెక్ట్!", "A tiny breeze moves a loose flower."),
-            ("Escalation", "The flower lands on Chinni's head like a crown.", "అయ్యో! పువ్వు నా తల మీదకు వచ్చేసింది!", "Grandmother laughs softly while Chinni looks surprised."),
-            ("Payoff", "Grandmother adjusts the flower into a neat little hair decoration.", "ఇప్పుడు నువ్వే పండుగ రాణివి!", "Chinni poses proudly; both smile toward the decorated doorway."),
+            ("Hook", "Chinni holds a loose flower garland that keeps slipping apart beside the finished rangoli. Grandmother watches nearby.", "నానమ్మా, ఈ పూలమాల అస్సలు నిలవట్లేదు!", "Chinni carefully gathers the same loose flowers, looking determined to finish the garland before the festival."),
+            ("Setup", "Chinni threads one more flower into the garland and lifts it proudly, but the middle knot starts to loosen.", "ఇంకో పువ్వు పెడితే గట్టిగా అవుతుంది!", "Grandmother reaches out to help, but Chinni wants to try one more time independently."),
+            ("Escalation", "The loose knot slips; a few flowers tumble gently into Chinni's hair and onto the cloth beside the rangoli.", "అయ్యో! మళ్లీ ఊడిపోయింది!", "Chinni looks disappointed at first, then notices the flowers sitting like a little crown on their head."),
+            ("Payoff", "Grandmother uses the same fallen flowers to arrange a neat flower crown on Chinni's head; the rangoli remains untouched.", "మాల కాకపోయినా, నా పూల కిరీటం బాగుంది కదా నానమ్మా!", "Grandmother smiles and adjusts the crown. Chinni poses proudly for the festival, turning the failed garland into a happy surprise."),
         ],
     },
     "Mini Moral Story": {
@@ -524,12 +524,28 @@ def make_script(format_name, variant=None):
         "Mini Moral Story": ["Kiran", "Kiran", "Kiran", "Friend"],
         "Human vs Technology": ["Lok", "Lok", "Lok", "Lok"],
     }
-    for scene, speaker in zip(scenes, dialogue_speakers[format_name]):
+    speakers = list(dialogue_speakers[format_name])
+
+    # Variant-specific dialogue ownership: bedtime/homework scenes use different speakers.
+    if variant:
+        variant_speakers = {
+            "little_secret_toy": ["Amma", "Chinnu", "Amma", "Chinnu"],
+            "sleep_deal": ["Amma", "Chinnu", "Chinnu", "Chinnu"],
+            "homework_deal": ["Amma", "Chinnu", "Amma", "Amma"],
+        }
+        speakers = variant_speakers.get(variant.get("variant_id"), speakers)
+
+    # The vendor speaks in the village-comedy setup scene.
+    if format_name == "Village Comedy":
+        speakers[1] = "Vendor"
+
+    for scene, speaker in zip(scenes, speakers):
         scene["dialogue_speaker"] = speaker
 
     return {
         "language": "Natural spoken Telugu",
         "production_instruction_language": "English",
+        "generation_method": "Authored templates and plot variants; not a generative language model.",
         "target_duration_seconds": TARGET_DURATION,
         "aspect_ratio": "9:16",
         "visual_style": "Original high-quality cinematic 3D family animation",
@@ -555,7 +571,9 @@ def make_script(format_name, variant=None):
 
 
 def validate_script(script, format_name=None, variant_id=None):
-    """Validate structure and selected authored continuity rules; not a grammar/humor judge."""
+    """Validate structure, speaker ownership, dialogue density, and selected authored plot continuity.
+    This cannot certify Telugu grammar, originality, or whether a joke is funny.
+    """
     errors = []
     warnings = []
     scenes = script.get("scenes", [])
@@ -641,6 +659,25 @@ def validate_script(script, format_name=None, variant_id=None):
             errors.append("Family comedy: the kitchen distraction must be established in Setup and explicitly rejected in Escalation.")
         if not any(term in scene_texts[3] for term in ("reveals", "brings", "out")):
             errors.append("Family comedy: the payoff must visibly reveal the hidden toy.")
+
+    # Festival plot gate: the garland must be introduced before it comes apart,
+    # and the final crown must reuse the same flowers as a resolution.
+    if format_name == "Festival Story" and len(scenes) == 4:
+        texts = [clean_text(" ".join([
+            scene.get("visual_direction", ""),
+            scene.get("character_action_and_expression", ""),
+            scene.get("dialogue_telugu", ""),
+        ])).lower() for scene in scenes]
+        if not any(term in texts[0] for term in ("garland", "పూలమాల")):
+            errors.append("Festival story: Hook must introduce the flower garland problem.")
+        if not any(term in texts[1] for term in ("garland", "flower", "పువ్వు", "పూలమాల")):
+            errors.append("Festival story: Setup must continue the same garland problem.")
+        if not any(term in texts[2] for term in ("loose", "slips", "tumble", "ఊడిపోయింది", "పూలు")):
+            errors.append("Festival story: Escalation must show the garland problem getting worse.")
+        if not any(term in texts[3] for term in ("crown", "same fallen flowers", "flower crown", "కిరీటం", "పూలు")):
+            errors.append("Festival story: Payoff must resolve the garland problem using the same flowers.")
+        if not any(term in texts[0] for term in ("rangoli", "ముగ్గు")):
+            warnings.append("Festival story: Make the rangoli visible as part of the festival setting.")
 
     return {
         "valid": len(errors) == 0,
@@ -786,7 +823,7 @@ def main():
 
     selected = candidates[0]
     selected["selection"] = {
-        "planner_version": "3.3-variety-and-duplicate-gate",
+        "planner_version": "3.5-final-review",
         "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
@@ -815,12 +852,12 @@ def main():
             "Public views per day are only a rough trend signal.",
             "Scripts are generated from authored templates and authored plot variants, not a generative AI model.",
             "Quality checks validate structure, dialogue density, selected continuity rules, and recent-history similarity; they cannot guarantee perfect Telugu grammar or humor.",
-            "The planner now includes three distinct family-comedy plots and applies a stronger recent-format penalty to encourage variety.",
+            "The planner includes distinct family-comedy plots, a recent-format penalty, and a festival-story continuity gate.",
             "Video generation, voice synthesis, editing, and publishing are separate workflow stages.",
         ],
     }
 
-    validation = validate_script(selected["script"], selected["format"])
+    validation = validate_script(selected["script"], selected["format"], selected.get("story_variant"))
     selected["validation"] = validation
     if not validation["valid"]:
         raise RuntimeError("Final script validation failed: " + "; ".join(validation["errors"]))
