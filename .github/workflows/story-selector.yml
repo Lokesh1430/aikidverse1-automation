@@ -1,0 +1,36 @@
+
+name: AIKidVerse1 Story Planner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Select and save story
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python story_selector.py
+
+      - name: Save story brief
+        uses: actions/upload-artifact@v4
+        with:
+          name: aikidverse1-daily-story
+          path: daily_story.json
+          retention-days: 7
