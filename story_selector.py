@@ -194,6 +194,48 @@ STORY_FORMATS = {
 }
 
 
+# Distinct authored story premises for the channel's strongest format. These are
+# separate plots, not title-only variations.
+FAMILY_VARIANTS = [
+    {
+        "variant_id": "little_secret_toy",
+        "title": "The Little Secret — Telugu Family Comedy",
+        "hook": "చిన్నూ, నీ వెనకాల ఏముంది?",
+        "concept": "Chinnu hides a squeaky toy, tries to distract Amma with a kitchen noise, but the toy keeps squeaking and reveals the secret.",
+        "beats": [
+            ("Hook", "Close-up: Chinnu hides a small squeaky toy behind their back. It squeaks once; Amma notices.", "చిన్నూ, నీ వెనకాల ఏముంది?", "Chinnu freezes and tries to look innocent."),
+            ("Setup", "Chinnu keeps the toy hidden and points toward the kitchen to distract Amma.", "అమ్మా, వంటగదిలో ఏదో పడినట్టుంది!", "Amma glances toward the kitchen; the hidden toy squeaks again."),
+            ("Escalation", "Amma turns back as the toy squeaks again. Keep it hidden until she identifies the sound.", "వంటగదిలో ఏమీ పడలేదు… శబ్దం నీ వెనకాల నుంచే వస్తోంది!", "Amma points gently toward Chinnu's back; Chinnu realizes the toy gave away the secret."),
+            ("Payoff", "Chinnu reveals the same toy. It squeaks once more and Amma tries not to laugh.", "అమ్మా… ఈ బొమ్మే నా రహస్యాన్ని చెప్పేసింది!", "Chinnu hugs the toy sheepishly; Amma laughs with Chinnu."),
+        ],
+    },
+    {
+        "variant_id": "sleep_deal",
+        "title": "The Sleep Deal — Smart Baby vs Amma",
+        "hook": "చిన్నూ, ఇంకా నిద్రపోలేదా?",
+        "concept": "Chinnu negotiates for five more minutes before bedtime, but every excuse accidentally proves Amma is right.",
+        "beats": [
+            ("Hook", "At bedtime, Chinnu sits upright under a blanket while Amma switches off the bright room light.", "చిన్నూ, ఇంకా నిద్రపోలేదా?", "Chinnu quickly closes their eyes, then peeks to see if Amma noticed."),
+            ("Setup", "Chinnu raises one finger and sits up with a serious bargaining expression.", "అమ్మా, ఇంకో ఐదు నిమిషాలు మాత్రమే!", "Amma looks at the clock and calmly raises an eyebrow."),
+            ("Escalation", "Chinnu claims to be wide awake, but gives a huge sleepy yawn mid-sentence.", "నాకు అస్సలు నిద్ర రావట్లేదు… ఆవలింత మాత్రం వచ్చింది!", "Chinnu covers the yawn; Amma gently pulls the blanket up."),
+            ("Payoff", "Amma says goodnight; Chinnu is already asleep holding a teddy bear.", "ఐదు నిమిషాలు అయిపోయాయా?", "Chinnu mumbles in sleep; Amma smiles and dims the bedside lamp."),
+        ],
+    },
+    {
+        "variant_id": "homework_deal",
+        "title": "Homework Deal — Bajjis First, Homework Later",
+        "hook": "చిన్నూ, హోంవర్క్ చేశావా?",
+        "concept": "Chinnu tries to trade snacks for homework time, but Amma turns the clever deal into a funny lesson about finishing one task first.",
+        "beats": [
+            ("Hook", "Chinnu hides an unopened notebook behind a plate and looks toward a bowl of bajjis.", "చిన్నూ, హోంవర్క్ చేశావా?", "Chinnu smiles nervously and slides the notebook farther away."),
+            ("Setup", "Chinnu points at the snack plate as if presenting a serious business proposal.", "ముందు బజ్జీలు… తర్వాత హోంవర్క్ ఎలా ఉంటుంది?", "Amma folds her arms, pretending to consider the deal."),
+            ("Escalation", "Amma opens the notebook; every page is blank. Chinnu tries to offer one tiny bajji as a bribe.", "ఇది హోంవర్క్ నోట్బుక్కా, ఖాళీ పుస్తకమా?", "Chinnu slowly hides the bajji behind their back."),
+            ("Payoff", "Amma places the notebook beside the plate and points to the first question; Chinnu picks up a pencil.", "మొదటి ప్రశ్న పూర్తి చేస్తే మొదటి బజ్జీ!", "Chinnu starts writing at top speed while Amma smiles and guards the plate playfully."),
+        ],
+    },
+]
+
+
 TREND_QUERIES = [
     ("Telugu comedy shorts", "Telugu Baby and Family Comedy"),
     ("funny 3D animation shorts", "Visual Slapstick"),
@@ -417,7 +459,7 @@ def fetch_history(sb):
     return response.data or []
 
 
-def make_script(format_name):
+def make_script(format_name, variant=None):
     spec = STORY_FORMATS[format_name]
     scene_beats = spec["scenes"]
     scene_durations = [5, 12, 13, 15]
@@ -460,6 +502,14 @@ def make_script(format_name):
             },
             "transition": "Use a simple continuous cut; do not change location or character design.",
         })
+
+    # A family variant replaces all four beats together, preserving story continuity.
+    if variant:
+        for idx, (beat, visual, dialogue, action) in enumerate(variant["beats"]):
+            scenes[idx]["scene_name"] = beat
+            scenes[idx]["visual_direction"] = visual
+            scenes[idx]["dialogue_telugu"] = dialogue
+            scenes[idx]["character_action_and_expression"] = action
 
     # Set speaker labels for every format, using character names in the authored line.
     dialogue_speakers = {
@@ -504,7 +554,7 @@ def make_script(format_name):
     }
 
 
-def validate_script(script, format_name=None):
+def validate_script(script, format_name=None, variant_id=None):
     """Validate structure and selected authored continuity rules; not a grammar/humor judge."""
     errors = []
     warnings = []
@@ -577,7 +627,7 @@ def validate_script(script, format_name=None):
 
     # Format-specific continuity gates for the squeaky-toy story. This catches
     # regressions where the setup prop disappears before the payoff.
-    if format_name == "Telugu Baby and Family Comedy" and len(scenes) == 4:
+    if format_name == "Telugu Baby and Family Comedy" and variant_id == "little_secret_toy" and len(scenes) == 4:
         scene_texts = [clean_text(" ".join([
             scene.get("visual_direction", ""),
             scene.get("character_action_and_expression", ""),
@@ -605,90 +655,98 @@ def build_candidates(own_videos, external_scores, history):
     max_own = max(own_scores.values(), default=1.0)
     max_external = max(external_scores.values(), default=1.0)
 
-    # Count formats recently used, based on title/concept text.
+    # Count recent use by format and retain the last few concepts for semantic
+    # duplicate checks. The stronger recency penalty stops a single popular format
+    # from winning every day when other valid choices exist.
     recent_usage = Counter()
-    for old in history[:20]:
-        text = " ".join([
-            clean_text(old.get("title")),
-            clean_text(old.get("concept")),
-        ])
-        fmt = infer_format(text)
+    recent_history = history[:12]
+    for old in recent_history:
+        fmt = infer_format(" ".join([clean_text(old.get("title")), clean_text(old.get("concept"))]))
         if fmt:
             recent_usage[fmt] += 1
 
+    family_variants = FAMILY_VARIANTS
     candidates = []
     for format_name, spec in STORY_FORMATS.items():
+        variants = family_variants if format_name == "Telugu Baby and Family Comedy" else [None]
         channel_signal = own_scores.get(format_name, 0) / max_own if own_scores else 0.35
         trend_signal = external_scores.get(format_name, 0) / max_external if external_scores else 0.25
-        novelty_signal = 1.0 / (1.0 + recent_usage[format_name])
-        variety_signal = 1.0 / (1.0 + recent_usage[format_name])
+        # Apply a meaningful recent-format penalty. Channel performance still matters,
+        # but it cannot drown out novelty and variety.
+        usage_count = recent_usage[format_name]
+        novelty_signal = 1.0 / (1.0 + usage_count * 1.5)
+        variety_signal = 1.0 / (1.0 + usage_count * 2.0)
+        base_score = (0.35 * channel_signal + 0.25 * trend_signal
+                      + 0.25 * novelty_signal + 0.15 * variety_signal)
 
-        score = (
-            0.40 * channel_signal
-            + 0.30 * trend_signal
-            + 0.20 * novelty_signal
-            + 0.10 * variety_signal
-        )
+        for variant in variants:
+            variant_id = variant["variant_id"] if variant else format_name.lower().replace(" ", "_")
+            title = variant["title"] if variant else {
+                "School Comedy": "Homework Has a Mind of Its Own — School Comedy",
+                "Animal Adventure": "Mintu and the Giant Nut — Animal Adventure",
+                "Visual Slapstick": "The Balloon Boss — Visual Comedy",
+                "Fantasy Comedy": "The Wand That Did the Wrong Thing — Fantasy Comedy",
+                "Village Comedy": "The Giant Watermelon Problem — Village Comedy",
+                "Human and Animal Friendship": "A Tiny Friend in Need — Friendship Story",
+                "Festival Story": "The Flower Crown Surprise — Festival Story",
+                "Mini Moral Story": "The Honest Little Fix — Moral Story",
+                "Human vs Technology": "The Robot's Extra Task — Tech Comedy",
+            }[format_name]
+            script = make_script(format_name, variant)
+            validation = validate_script(script, format_name, variant_id)
+            if not validation["valid"]:
+                log.warning("Rejecting %s: %s", title, validation["errors"])
+                continue
 
-        script = make_script(format_name)
-        validation = validate_script(script, format_name)
-        if not validation["valid"]:
-            log.warning("Rejecting %s: %s", format_name, validation["errors"])
-            continue
+            if variant:
+                concept = "Original Telugu family-comedy short. " + variant["concept"]
+            else:
+                concept = (f"Original {format_name} short. Core setup: {spec['scenes'][0][1]} "
+                           f"Resolution: {spec['scenes'][3][1]}")
 
-        concept = (
-            f"Original {format_name} short. "
-            f"Core setup: {spec['scenes'][0][1]} "
-            f"Resolution: {spec['scenes'][3][1]}"
-        )
-        title = {
-            "Telugu Baby and Family Comedy": "The Little Secret — Telugu Family Comedy",
-            "School Comedy": "Homework Has a Mind of Its Own — School Comedy",
-            "Animal Adventure": "Mintu and the Giant Nut — Animal Adventure",
-            "Visual Slapstick": "The Balloon Boss — Visual Comedy",
-            "Fantasy Comedy": "The Wand That Did the Wrong Thing — Fantasy Comedy",
-            "Village Comedy": "The Giant Watermelon Problem — Village Comedy",
-            "Human and Animal Friendship": "A Tiny Friend in Need — Friendship Story",
-            "Festival Story": "The Flower Crown Surprise — Festival Story",
-            "Mini Moral Story": "The Honest Little Fix — Moral Story",
-            "Human vs Technology": "The Robot's Extra Task — Tech Comedy",
-        }[format_name]
+            # Include the hook, ending and story premise in the comparison. Exact keys
+            # catch identical records; token similarity catches renamed/reworded repeats.
+            story_text = " ".join([title, concept, script["scenes"][0]["dialogue_telugu"],
+                                   script["scenes"][-1]["dialogue_telugu"]])
+            duplicate = False
+            for old in history:
+                old_text = " ".join([clean_text(old.get("title")), clean_text(old.get("concept")),
+                                     clean_text(old.get("hook")), clean_text(old.get("ending"))])
+                if old.get("story_key") == story_key(title, concept) or similarity(story_text, old_text) >= 0.48:
+                    duplicate = True
+                    break
+            if duplicate:
+                log.info("Skipping previously used or highly similar story: %s", title)
+                continue
 
-        story_text = title + " " + concept
-        duplicate = False
-        for old in history:
-            old_text = " ".join([
-                clean_text(old.get("title")),
-                clean_text(old.get("concept")),
-            ])
-            if (
-                old.get("story_key") == story_key(title, concept)
-                or similarity(story_text, old_text) >= 0.72
-            ):
-                duplicate = True
-                break
-        if duplicate:
-            continue
+            # Small stable preference for variants not used in recent history.
+            variant_recent = sum(1 for old in recent_history
+                                 if variant_id in clean_text(old.get("concept")).lower()
+                                 or clean_text(old.get("title")).lower() == title.lower())
+            variant_novelty = 1.0 / (1.0 + variant_recent * 2.0)
+            score = base_score + 0.05 * variant_novelty
 
-        candidates.append({
-            "story_key": story_key(title, concept),
-            "title": title,
-            "concept": concept,
-            "hook": script["scenes"][0]["dialogue_telugu"],
-            "ending": script["scenes"][-1]["dialogue_telugu"],
-            "format": format_name,
-            "audience": "Telugu-speaking family and Shorts audiences",
-            "trend_topic": format_name,
-            "score": round(score, 4),
-            "score_breakdown": {
-                "channel_performance": round(channel_signal, 3),
-                "external_trends": round(trend_signal, 3),
-                "novelty": round(novelty_signal, 3),
-                "format_variety": round(variety_signal, 3),
-            },
-            "script": script,
-            "validation": validation,
-        })
+            candidates.append({
+                "story_key": story_key(title, concept),
+                "title": title,
+                "concept": concept,
+                "hook": script["scenes"][0]["dialogue_telugu"],
+                "ending": script["scenes"][-1]["dialogue_telugu"],
+                "format": format_name,
+                "story_variant": variant_id,
+                "audience": "Telugu-speaking family and Shorts audiences",
+                "trend_topic": format_name,
+                "score": round(score, 4),
+                "score_breakdown": {
+                    "channel_performance": round(channel_signal, 3),
+                    "external_trends": round(trend_signal, 3),
+                    "novelty": round(novelty_signal, 3),
+                    "format_variety": round(variety_signal, 3),
+                    "variant_novelty": round(variant_novelty, 3),
+                },
+                "script": script,
+                "validation": validation,
+            })
 
     return sorted(candidates, key=lambda x: x["score"], reverse=True)
 
@@ -728,7 +786,7 @@ def main():
 
     selected = candidates[0]
     selected["selection"] = {
-        "planner_version": "3.2-continuity-quality-gate",
+        "planner_version": "3.3-variety-and-duplicate-gate",
         "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
@@ -755,8 +813,9 @@ def main():
         "limitations": [
             "Trend results are public YouTube search samples, not an official trending ranking.",
             "Public views per day are only a rough trend signal.",
-            "Scripts are generated from authored templates, not a generative AI model.",
-            "Quality checks validate structure, dialogue density, and selected authored continuity rules; they cannot guarantee perfect Telugu grammar or humor.",
+            "Scripts are generated from authored templates and authored plot variants, not a generative AI model.",
+            "Quality checks validate structure, dialogue density, selected continuity rules, and recent-history similarity; they cannot guarantee perfect Telugu grammar or humor.",
+            "The planner now includes three distinct family-comedy plots and applies a stronger recent-format penalty to encourage variety.",
             "Video generation, voice synthesis, editing, and publishing are separate workflow stages.",
         ],
     }
