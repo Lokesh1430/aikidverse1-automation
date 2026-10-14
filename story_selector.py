@@ -824,7 +824,7 @@ def generate_gemini_story(selected, history, own_videos, external_videos):
             "No template fallback is allowed in AI mode."
         )
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
     client = genai.Client(api_key=api_key)
 
     recent_stories = []
