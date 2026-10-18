@@ -863,7 +863,9 @@ NON-NEGOTIABLE REQUIREMENTS:
 - Every scene must advance the same story. No unrelated actions, unexplained objects, teleporting props, or sudden character changes.
 - Give every spoken line exactly one speaker; the speaker name must exist in character_bible. Keep dialogue short enough to say naturally in its scene.
 - Include at least two characters unless the story format strongly requires a solo visual-comedy character; no extra speaking characters beyond character_bible.
-- Family-friendly, safe, original visuals; no copying source videos, copyrighted characters, or exact dialogue from trends.
+- Family-friendly, age-appropriate, safe, original visuals; no copying source videos, copyrighted characters, or exact dialogue from trends.
+- Never depict choking hazards, swallowing or stuffing whole food into the mouth, dangerous stunts, weapons, realistic violence, or children in unsafe situations. Food comedy must use small, safe bites or harmless visual reactions.
+- Keep every character's age, clothes, appearance, location, props, and physical position consistent across all four scenes. No teleporting, unexplained prop changes, or sudden character changes.
 - Do not include captions, on-screen text, logos, or watermarks.
 - Do NOT reuse the recent story titles/concepts/hooks/endings below. Avoid near-duplicates, not just changed titles.
 - Return ONLY valid JSON. No Markdown fences or commentary.
