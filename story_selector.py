@@ -1,6 +1,6 @@
 """
-AIKidVerse1 Story Planner v4.1
-Gemini-assisted Telugu, English, and silent visual-comedy Shorts planning with deterministic quality gates.
+AIKidVerse1 Story Planner v4.3
+Gemini-assisted Telugu, English, and silent visual-comedy Shorts planning with deterministic quality and physical-safety gates.
 
 Inputs:
   SUPABASE_URL
@@ -685,6 +685,68 @@ def child_food_safety_errors(script):
     return errors
 
 
+def child_physical_safety_errors(script):
+    """Reject obvious weapon-prop and unstable-stacking stunts in child comedy.
+
+    These deterministic text checks are intentionally conservative and do not
+    replace human review of generated video frames.
+    """
+    errors = []
+    scenes = script.get("scenes", [])
+    weapon_pattern = re.compile(
+        r"\b(?:(?:toy|plastic|wooden|foam)\s+){0,2}(?:sword|knife|dagger|blade|spear|weapon)\b",
+        re.IGNORECASE,
+    )
+    multiple_hat_stack_pattern = re.compile(
+        r"\b(?:third|fourth|fifth|multiple|several|five|many)\s+hats?\b.{0,100}\b(?:on top of|head|stack|tower)\b",
+        re.IGNORECASE,
+    )
+    unstable_stack_pattern = re.compile(
+        r"\b(?:stack(?:ed|ing)?|tower|wobbl\w*|teeter\w*)\b", re.IGNORECASE
+    )
+    unstable_movement_pattern = re.compile(
+        r"\b(?:head|walk\w*|run\w*|balance|balancing|tiptoe|tightrope|dangerously|fall\w*)\b",
+        re.IGNORECASE,
+    )
+    stacked_item_pattern = re.compile(
+        r"\b(?:hat|hats|object|objects|item|items|book|books|block|blocks|prop|props)\b",
+        re.IGNORECASE,
+    )
+
+    for index, scene in enumerate(scenes, start=1):
+        scene_text = " ".join([
+            clean_text(scene.get("visual_direction", "")),
+            clean_text(scene.get("character_action_and_expression", "")),
+            clean_text(scene.get("dialogue_text", "")),
+            clean_text(scene.get("dialogue_telugu", "")),
+            clean_text(scene.get("voice_direction", "")),
+            clean_text(scene.get("transition", "")),
+            json.dumps(scene.get("audio", {}), ensure_ascii=False),
+            clean_text(scene.get("music", "")),
+            clean_text(scene.get("sound_effects", "")),
+        ])
+
+        if weapon_pattern.search(scene_text):
+            errors.append(
+                f"Scene {index}: weapon-like prop detected. Replace swords, knives, or similar props "
+                "with a harmless non-weapon object; do not use them around a child."
+            )
+
+        unstable_head_stack = bool(multiple_hat_stack_pattern.search(scene_text))
+        unstable_moving_stack = bool(
+            unstable_stack_pattern.search(scene_text)
+            and unstable_movement_pattern.search(scene_text)
+            and stacked_item_pattern.search(scene_text)
+        )
+        if unstable_head_stack or unstable_moving_stack:
+            errors.append(
+                f"Scene {index}: unstable stacked-object or balancing stunt detected. "
+                "Keep props low and stable; do not balance piles on a child's head or walk while balancing them."
+            )
+
+    return errors
+
+
 def validate_script(script, format_name=None, variant_id=None):
     """Validate structure, speaker ownership, dialogue density, and selected authored plot continuity.
     This cannot certify Telugu grammar, originality, or whether a joke is funny.
@@ -693,6 +755,7 @@ def validate_script(script, format_name=None, variant_id=None):
     warnings = []
     scenes = script.get("scenes", [])
     errors.extend(child_food_safety_errors(script))
+    errors.extend(child_physical_safety_errors(script))
     language_mode = clean_text(script.get("language_mode", "telugu")).lower()
     allowed_modes = {"telugu", "english", "silent_visual"}
     if language_mode not in allowed_modes:
@@ -1000,7 +1063,8 @@ NON-NEGOTIABLE REQUIREMENTS:
 - Child and toddler safety is mandatory. Never show choking hazards, stuffing or forcing food into a child's mouth, oversized bites, or a child eating unsupervised.
 - Never put food intended for eating into a toy vehicle, toy container, or other play prop. Toys must never carry, load, deliver, or transfer food to a child's mouth. Never turn a child's mouth into a station, garage, target, or prop for a joke.
 - When eating is part of the story, show an adult supervising and serving an age-appropriate, safely prepared bite on a clean plate or with an appropriate eating utensil. Avoid whole nuts, whole grapes, popcorn, hard round foods, and large hard raw-vegetable chunks for toddlers. Do not pressure or force a child to eat.
-- Keep all other physical comedy harmless and family-friendly; no dangerous stunts, realistic violence, or children in unsafe situations.
+- Keep all physical comedy harmless and family-friendly; no dangerous stunts, realistic violence, or children in unsafe situations.
+- Never make a child balance a tall stack or tower of objects on their head or body, and never have a child walk or wobble while balancing a pile. Do not give children swords, knives, or weapon-like props, or use tools to adjust objects near a child's face or body. Use low, stable props and harmless visual gags instead.
 - Keep character age, clothes, appearance, location, props, and physical positions consistent across all scenes.
 - Do not include captions, on-screen text, logos, or watermarks.
 - Do NOT reuse the recent story titles/concepts/hooks/endings below. Avoid near-duplicates, not just changed titles.
@@ -1216,7 +1280,7 @@ def main():
 
     selected = candidates[0]
     selected["selection"] = {
-        "planner_version": "4.2-multimode-child-safety-guardrails",
+        "planner_version": "4.3-multimode-physical-safety-guardrails",
         "selected_at_utc": now_utc().isoformat(),
         "selection_score": selected["score"],
         "score_breakdown": selected["score_breakdown"],
